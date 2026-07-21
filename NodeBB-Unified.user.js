@@ -3,7 +3,7 @@
 // @namespace    https://mitmachim.top/nodebb-unified/
 // @version      1.1.0
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
-// @author       מחברי הסקריפטים המקוריים
+// @author       Amlaach, Moishy & מחברי הסקריפטים המקוריים
 // @match        http://*/*
 // @match        https://*/*
 // @grant        GM_getValue

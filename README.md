@@ -151,8 +151,9 @@ Test 4: Testing Fail-Closed Import Payload Security (validateImportPayload)...
 
 ---
 
-## רישיון ותרומה
+## קרדיטים ותרומה
 
-- **מברים מקוריים:** מודולים שונים נכתבו על ידי חברי קהילת [מתמחים טופ](https://mitmachim.top/).
-- **איחוד ואבטחה:** מתוחזק ומאוחד על ידי [Moishy](https://github.com/moishyf).
+- **אבטחה, הקשחה ובדיקות אוטומטיות:** [Amlaach](https://github.com/Amlaach) – מוביל סקירת האבטחה, תיקוני DOM XSS, ריכוז גישות `unsafeWindow`, אבטחת מנגנון הייבוא (Fail-Closed) והקמת מערך הבדיקות האוטומטיות (CI).
+- **איחוד ותחזוקה:** [Moishy](https://github.com/moishyf).
+- **מחברים מקוריים:** מודולים שונים נכתבו ופותחו על ידי חברי קהילת [מתמחים טופ](https://mitmachim.top/).
 - **תרומה לפרויקט:** הצעות לשיפור, דיווחי באגים ו-Pull Requests יתקבלו בברכה דרך [GitHub Issues](https://github.com/moishyf/NodeBB-Unified/issues).
