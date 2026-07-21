@@ -25,6 +25,20 @@
 (function () {
     'use strict';
 
+    function pageWindow() {
+        return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, character => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        })[character]);
+    }
+
     const modules = [
     {
         id: "hebrew-translations",
@@ -5384,8 +5398,9 @@
  
     function isNodeBB() {
         try {
+            const rawWin = pageWindow();
             const originalDetection =
-                (unsafeWindow.config && unsafeWindow.ajaxify) ||
+                (rawWin.config && rawWin.ajaxify) ||
                 document.querySelector('meta[name="generator"][content="NodeBB"]');
 
             if (originalDetection) return true;
@@ -5408,8 +5423,9 @@
  
     function getSiteName() {
         try {
-            if (unsafeWindow.config && unsafeWindow.config.siteTitle) {
-                return unsafeWindow.config.siteTitle;
+            const rawWin = pageWindow();
+            if (rawWin.config && rawWin.config.siteTitle) {
+                return rawWin.config.siteTitle;
             }
         } catch(e) {}
         const parts = document.title.split('|');
@@ -15849,8 +15865,9 @@
     // פונקציה להזרקת הכפתור לפוסטים שעוד לא טופלו
     function injectChatButtons() {
         // בדיקה מקורית תחילה; ב-NodeBB מודרני app אינו תמיד גלובלי.
-        const originalUid = unsafeWindow.app && unsafeWindow.app.user
-            ? unsafeWindow.app.user.uid
+        const rawWin = pageWindow();
+        const originalUid = rawWin.app && rawWin.app.user
+            ? rawWin.app.user.uid
             : null;
         const headerAvatar = !originalUid
             ? document.querySelector('[component="header/avatar"] [data-uid]')
@@ -29340,6 +29357,12 @@
             return Promise.resolve(true);
         }
 
+        if (document.readyState === 'interactive' || document.readyState === 'complete') {
+            if (!detectNodeBB()) {
+                return Promise.resolve(false);
+            }
+        }
+
         return new Promise(resolve => {
             let finished = false;
             let observer = null;
@@ -29375,7 +29398,7 @@
                 }, 250);
             };
 
-            const timeout = window.setTimeout(() => finish(detectNodeBB()), 8000);
+            const timeout = window.setTimeout(() => finish(detectNodeBB()), 2500);
 
             document.addEventListener('DOMContentLoaded', check, { once: true });
 
@@ -32259,8 +32282,8 @@
                     return;
                 }
 
-                if (file.size > 50 * 1024 * 1024) {
-                    window.alert('קובץ הייבוא גדול מ־50MB ולכן לא ייטען.');
+                if (file.size > 10 * 1024 * 1024) {
+                    window.alert('קובץ הייבוא גדול מ־10MB ולכן לא ייטען.');
                     return;
                 }
 
