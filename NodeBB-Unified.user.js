@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.3.6
+// @version      1.2.0
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -25680,7 +25680,7 @@
         scoring: {
             // הדירוג המשוכלל = יחס מוניטין/פוסטים (כמו שקובע באתר), בריכוך בייסיאני
             // כדי שמשתמש עם מעט פוסטים לא יקפוץ לראש על סמך יחס גבוה מקרי.
-            enabled: true,          // false = דירוג לפי reputation גולמי (התנהגות ישנה)
+            enabled: false,         // ברירת מחדל = דירוג רגיל (מוניטין גולמי); true = משוכללת (יחס R/P)
             bayesConfidence: 20,    // C: כמה פוסטים "וירטואליים" בממוצע-האתר ממתנים משתמש חדש (0 = R/P טהור)
         },
 
