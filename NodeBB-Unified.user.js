@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.3.1
+// @version      1.3.2
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -32652,33 +32652,9 @@
     }
 
     // NodeBB שולח פוסטים/עריכות/צ'אט דרך socket.io, לא REST - חייבים לעטוף גם את socket.emit
-    const SOCKET_EVENTS = {
-        'posts.reply': 'content',
-        'topics.post': 'content',
-        'posts.edit': 'content',
-        'modules.chats.send': 'message',
-    };
-    function wrapSocket() {
-        const s = W.socket;
-        if (!s || typeof s.emit !== 'function' || s.emit.__nbbuWrapped) return !!(s && s.emit && s.emit.__nbbuWrapped);
-        const orig = s.emit;
-        s.emit = function (event, data, ...rest) {
-            try {
-                const field = enabled && SOCKET_EVENTS[event];
-                if (field && data && typeof data === 'object' && typeof data[field] === 'string' && !hasMarker(data[field])) {
-                    data[field] = data[field] + MARKER;
-                    log('הוזרק סימן ל-' + field + ' דרך socket:' + event);
-                }
-            } catch { /* fail-open */ }
-            return orig.apply(this, [event, data, ...rest]);
-        };
-        s.emit.__nbbuWrapped = true;
-        log('socket.emit נעטף');
-        return true;
-    }
-
+    // ponytail: לא עוטפים XHR/socket.emit - זה עבר בנתיב של כל בקשות ה-polling של socket.io
+    // ושבר את החיבור (400/xhr poll error). מזריקים רק דרך fetch (מסלול נפרד מ-socket.io).
     function wrapNetwork() {
-        // fetch
         const origFetch = W.fetch;
         if (typeof origFetch === 'function' && !origFetch.__nbbuWrapped) {
             const wrapped = function (input, init) {
@@ -32694,26 +32670,6 @@
             };
             wrapped.__nbbuWrapped = true;
             W.fetch = wrapped;
-        }
-
-        // XMLHttpRequest (jQuery ajax)
-        const XHR = W.XMLHttpRequest;
-        if (XHR && XHR.prototype && !XHR.prototype.__nbbuWrapped) {
-            const origOpen = XHR.prototype.open;
-            const origSend = XHR.prototype.send;
-            XHR.prototype.open = function (method, url, ...rest) {
-                this.__nbbuUrl = url;
-                return origOpen.call(this, method, url, ...rest);
-            };
-            XHR.prototype.send = function (body) {
-                try {
-                    if (enabled && typeof body === 'string' && WRITE_RE.test(this.__nbbuUrl || '')) {
-                        body = injectIntoBody(body);
-                    }
-                } catch { /* fail-open */ }
-                return origSend.call(this, body);
-            };
-            XHR.prototype.__nbbuWrapped = true;
         }
     }
 
@@ -32959,11 +32915,6 @@
 
     // עוטפים את הרשת מיד (document-start) כדי לא לפספס שליחות מוקדמות
     wrapNetwork();
-    // ה-socket נטען אסינכרונית - עוטפים ברגע שהוא זמין
-    (function pollSocket(tries = 60) {
-        if (wrapSocket() || tries <= 0) return;
-        setTimeout(() => pollSocket(tries - 1), 500);
-    })();
 
     // toggle דרך תפריט הסקריפט (opt-in, ברירת מחדל דלוק)
     try {
