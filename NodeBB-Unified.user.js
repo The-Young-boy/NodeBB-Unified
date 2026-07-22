@@ -4719,16 +4719,15 @@
             'המשתמשים המסומנים שלי'
         );
 
+        // ה-badge של המונה מופיע רק כשיש משתמשים מסומנים בפועל.
+        // אחרת "0" כחול נראה כמו התראת-הודעה חדשה.
         button.innerHTML = `
             <span class="mtpun-sidebar-icon-wrapper">
                 <i
                     class="fa fa-fw fa-note-sticky mtpun-sidebar-icon"
                     aria-hidden="true"
                 ></i>
-
-                <span class="mtpun-sidebar-count">
-                    ${count}
-                </span>
+                ${count > 0 ? `<span class="mtpun-sidebar-count">${count}</span>` : ''}
             </span>
         `;
     }
