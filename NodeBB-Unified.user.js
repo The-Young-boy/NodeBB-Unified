@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.3.5
+// @version      1.3.6
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -25678,18 +25678,10 @@
         // ניקוד = רעננות^severity × Σ(משקל × אחוזון_רכיב). נרמול=אחוזון (עמיד לחריגים).
         // הנוסחה משוכפלת ב-test/ranking.test.js - לעדכן את שניהם יחד.
         scoring: {
-            // קומפוזיט רזה: רק נתונים שרשימת /api/users באמת מחזירה (reputation, postcount,
-            // joindate, lastonline). הוסרו velocity/momentum/topicQuality/influence - היו
-            // ענישת-ותק, רעש-דלתא, וכפילות/משקל-מת חסרי-נתונים ששיבשו את הדירוג.
+            // הדירוג המשוכלל = יחס מוניטין/פוסטים (כמו שקובע באתר), בריכוך בייסיאני
+            // כדי שמשתמש עם מעט פוסטים לא יקפוץ לראש על סמך יחס גבוה מקרי.
             enabled: true,          // false = דירוג לפי reputation גולמי (התנהגות ישנה)
-            bayesConfidence: 20,    // C: כמה פוסטים "וירטואליים" בממוצע-האתר ממתנים משתמש חדש
-            recencyHalfLifeDays: 365, // חצי-חיים לדעיכת רעננות: רדום שנה => מכפיל 0.5
-            recencySeverity: 1.0,   // חזקת מכפיל הרעננות
-            weights: {              // סכום = 1.0; לכוונון חופשי
-                quality: 0.55,      // (R + C·m)/(P + C) - מוניטין-לפוסט בייסיאני (ספאמר צולל)
-                volume: 0.30,       // log10(1 + R) - נפח תרומה כולל
-                activeSpan: 0.15,   // (lastonline - joindate) - אורך פעילות (ותיק פעיל עולה)
-            },
+            bayesConfidence: 20,    // C: כמה פוסטים "וירטואליים" בממוצע-האתר ממתנים משתמש חדש (0 = R/P טהור)
         },
 
         debug: false,
@@ -27096,33 +27088,8 @@
 
     // לכל ערך: אחוזון באוכלוסייה (midrank לתיקו). O(n log n).
     // כל הערכים שווים => כולם 0.5 (neutral).
-    function percentileMap(values) {
-        const n = values.length;
-        if (n <= 1) return values.map(() => 0.5);
-
-        const idx = values.map((_, i) => i).sort((a, b) => values[a] - values[b]);
-        const pct = new Array(n);
-
-        let i = 0;
-        while (i < n) {
-            let j = i;
-            while (j + 1 < n && values[idx[j + 1]] === values[idx[i]]) {
-                j += 1;
-            }
-            const p = ((i + j) / 2) / (n - 1); // מיקום midrank מנורמל 0..1
-            for (let k = i; k <= j; k += 1) {
-                pct[idx[k]] = p;
-            }
-            i = j + 1;
-        }
-
-        return pct;
-    }
-
     function computeSmartScores(users) {
         const cfg = CONFIG.scoring;
-        const now = Date.now();
-        const DAY = 86400000;
 
         const pool = users.filter(
             u => u?.userslug && !u.banned && !u.deleted && !u.muted
@@ -27131,7 +27098,8 @@
             return [];
         }
 
-        // ממוצע-אתר של reputation לכל פוסט (m) לאיכות הבייסיאנית
+        // ממוצע-אתר של מוניטין-לפוסט (m), לריכוך בייסיאני של מי שיש לו מעט פוסטים
+        // (מונע חריג כמו 1 פוסט / 5 לייקים שיקפוץ לראש). C=bayesConfidence "פוסטים וירטואליים".
         let sumR = 0;
         let sumP = 0;
         for (const u of pool) {
@@ -27140,37 +27108,11 @@
         }
         const m = sumP > 0 ? sumR / sumP : 0;
 
-        const raw = pool.map(u => {
+        // הדירוג = יחס מוניטין/פוסטים בלבד (כמו באתר), בייסיאני. C=0 => R/P טהור.
+        const scored = pool.map(u => {
             const R = Math.max(0, u.reputation);
             const P = Math.max(0, u.postcount);
-
-            // חסר lastonline => לא מענישים (לא-ידוע != רדום). ponytail
-            const idleDays = u.lastonline > 0 ? Math.max(0, (now - u.lastonline) / DAY) : 0;
-            const spanDays = (u.lastonline > 0 && u.joindate > 0)
-                ? Math.max(0, (u.lastonline - u.joindate) / DAY)
-                : 0;
-
-            return {
-                u,
-                quality: (R + cfg.bayesConfidence * m) / (P + cfg.bayesConfidence),
-                volume: Math.log10(1 + R),
-                activeSpan: spanDays,
-                recency: Math.pow(0.5, (idleDays / cfg.recencyHalfLifeDays) * cfg.recencySeverity),
-            };
-        });
-
-        const comps = ['quality', 'volume', 'activeSpan'];
-        const pcts = {};
-        for (const c of comps) {
-            pcts[c] = percentileMap(raw.map(r => r[c]));
-        }
-
-        const scored = raw.map((r, i) => {
-            let base = 0;
-            for (const c of comps) {
-                base += cfg.weights[c] * pcts[c][i];
-            }
-            return { ...r.u, smartScore: base * r.recency };
+            return { ...u, smartScore: (R + cfg.bayesConfidence * m) / (P + cfg.bayesConfidence) };
         });
 
         scored.sort((a, b) => b.smartScore - a.smartScore);
