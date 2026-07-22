@@ -32713,7 +32713,6 @@
         if (prev && Number(prev.key) === key && prev.isUser === isUser) return;
         cache[uid] = { isUser: !!isUser, key };
         scheduleFlush();
-        if (isUser) renderBadgesForUid(uid);
     }
 
     /* ---------- סריקת פוסטים/צ'אט לזיהוי הסימן ---------- */
@@ -32738,22 +32737,24 @@
         });
     }
 
-    /* ---------- תג-מאומת סגול על האווטאר ---------- */
+    /* ---------- תג-מאומת סגול ---------- */
     const BADGE_CLASS = 'nbbu-presence-badge';
-    const HOST_CLASS = 'nbbu-presence-host';
+    const BADGE_HOST_CLASS = 'nbbu-presence-host';
+    const CHAT_MARK_CLASS = 'nbbu-presence-chatmark';
+    // מודול "מחובר" מסמן כל אלמנט שמקבל נקודת-חיווי-חיבור במחלקה הזאת.
+    // התג עולה רק עליהם => בדיוק היכן שיש נקודת-חיווי (אווטאר-ליד-פוסט + דף-משתמש), לא על כל אווטאר.
+    const ONLINE_HOST = 'moishy-online-status-host';
+    const TOOLTIP = 'משתמש ב-NodeBB Unified';
 
     function addStyles() {
         if (document.getElementById('nbbu-presence-style')) return;
         const style = document.createElement('style');
         style.id = 'nbbu-presence-style';
-        // תג-מאומת (וי בתוך עיגול סגול), בפינה הנגדית לנקודת ה"מחובר" (ברירת מחדל: פינה עליונה).
-        // ponytail: מיקום פינה קבוע - אם צריך בדיוק מול נקודת-המחובר, לכוונן top/inset-inline.
         style.textContent = `
-            .${HOST_CLASS} { position: relative !important; overflow: visible !important; }
+            .${BADGE_HOST_CLASS} { position: relative !important; overflow: visible !important; }
             .${BADGE_CLASS} {
                 position: absolute !important;
-                top: -2px !important;
-                inset-inline-start: -2px !important;
+                right: -2px !important; bottom: -2px !important;  /* פינה ימנית-תחתונה (פיזי, גם ב-RTL) */
                 width: 14px !important; height: 14px !important;
                 border-radius: 50% !important;
                 background: #8b5cf6 !important;
@@ -32764,6 +32765,14 @@
                 box-shadow: 0 1px 3px rgba(0,0,0,.35) !important;
             }
             .${BADGE_CLASS} svg { width: 9px !important; height: 9px !important; display: block !important; }
+            /* בצ'אט: וי אינליין כהמשך טבעי לשורת הכותרת */
+            .${CHAT_MARK_CLASS} {
+                display: inline-flex !important; align-items: center !important; justify-content: center !important;
+                width: 1em !important; height: 1em !important; margin-inline-start: .25em !important;
+                border-radius: 50% !important; background: #8b5cf6 !important;
+                vertical-align: -0.12em !important;
+            }
+            .${CHAT_MARK_CLASS} svg { width: .66em !important; height: .66em !important; display: block !important; }
         `;
         (document.head || document.documentElement).appendChild(style);
     }
@@ -32771,44 +32780,102 @@
     const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
         + '<path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-    function avatarUid(avatar) {
-        const host = avatar.closest('[data-uid]');
-        if (host) return host.getAttribute('data-uid');
-        const link = avatar.closest('a[href*="/user/"]');
-        // אין data-uid ישיר; משאירים ל-uid בלבד (username->uid לא נפתר כאן). ponytail
-        return link ? '' : '';
-    }
+    const myUid = () => String((W.app && W.app.user && W.app.user.uid) || '');
 
-    function attachBadge(avatar) {
-        const uid = avatarUid(avatar);
-        if (!uid || !cache[uid] || !cache[uid].isUser) return;
-        const host = avatar.closest('[component="user/picture"]') || avatar.parentElement;
-        if (!host || host.querySelector(':scope > .' + BADGE_CLASS)) return;
-        host.classList.add(HOST_CLASS);
-        const badge = document.createElement('span');
-        badge.className = BADGE_CLASS;
-        badge.title = 'משתמש ב-NodeBB Unified';
-        badge.innerHTML = CHECK_SVG;
-        host.appendChild(badge);
-    }
+    const inChat = el => !!el.closest(
+        '[component="chat/message-window"], [component="chat/messages"], .chat-modal, .chats-container, [component="chat/recent"]'
+    );
 
-    function scanAvatars(root) {
-        const scope = (root instanceof Element) ? root : document;
-        scope.querySelectorAll('[component="user/picture"], img.avatar, [class*="avatar"] img').forEach(avatar => {
-            const img = avatar.tagName === 'IMG' ? avatar : avatar;
-            try { attachBadge(img); } catch { /* אווטאר בעייתי - דילוג */ }
-        });
-    }
-
-    function renderBadgesForUid(uid) {
-        document.querySelectorAll(`[data-uid="${CSS.escape(String(uid))}"]`).forEach(host => {
-            const avatar = host.matches('[component="user/picture"], img.avatar')
+    // תג על האווטאר: רק היכן שמודול-המחובר הניח נקודת-חיווי, ולא בצ'אט (בצ'אט - שורת הכותרת בלבד)
+    function badgeOnlineHosts() {
+        document.querySelectorAll('.' + ONLINE_HOST).forEach(host => {
+            if (host.querySelector(':scope > .' + BADGE_CLASS)) return;
+            if (inChat(host)) return;
+            const uidEl = host.matches('[data-uid]')
                 ? host
-                : host.querySelector('[component="user/picture"], img.avatar');
-            if (avatar) {
-                try { attachBadge(avatar); } catch { /* דילוג */ }
-            }
+                : (host.closest('[data-uid]') || host.querySelector('[data-uid]'));
+            const uid = uidEl && uidEl.getAttribute('data-uid');
+            if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
+            host.classList.add(BADGE_HOST_CLASS);
+            const badge = document.createElement('span');
+            badge.className = BADGE_CLASS;
+            badge.title = TOOLTIP;
+            badge.innerHTML = CHECK_SVG;
+            host.appendChild(badge);
         });
+    }
+
+    // בצ'אט: וי כהמשך לשורת הכותרת #chat-room-title-<roomId>, אם הצד-השני משתמש בסקריפט
+    function badgeChatTitles() {
+        document.querySelectorAll('[id^="chat-room-title-"]').forEach(title => {
+            if (title.querySelector(':scope > .' + CHAT_MARK_CLASS)) return;
+            const win = title.closest(
+                '[component="chat/message-window"], .chat-modal, .expanded-chat, .chats-full'
+            ) || document;
+            const me = myUid();
+            // הצד-השני: uid בחלון הצ'אט ששונה ממני (1:1). ponytail: בקבוצה ייבחר הראשון
+            let otherUid = '';
+            win.querySelectorAll('[data-uid]').forEach(el => {
+                const u = el.getAttribute('data-uid');
+                if (u && u !== '0' && u !== me && !otherUid) otherUid = u;
+            });
+            if (!otherUid || !cache[otherUid] || !cache[otherUid].isUser) return;
+            const mark = document.createElement('span');
+            mark.className = CHAT_MARK_CLASS;
+            mark.title = TOOLTIP;
+            mark.innerHTML = CHECK_SVG;
+            title.appendChild(mark);
+        });
+    }
+
+    /* ---------- ריצה ראשונה: עריכת הפוסט האחרון להוספת הסימן (חיווי מיידי) ---------- */
+    const FIRSTRUN_KEY = 'nbbu_presence_firstrun_v1';
+
+    async function getCsrf() {
+        try {
+            const cfg = await W.fetch('/api/config', {
+                headers: { Accept: 'application/json' }, credentials: 'same-origin',
+            }).then(r => r.json());
+            return cfg && cfg.csrf_token;
+        } catch { return null; }
+    }
+
+    async function firstRunEditLastPost() {
+        if (!enabled || GM_getValue(FIRSTRUN_KEY, false)) return;
+        const user = W.app && W.app.user;
+        if (!user || !user.uid || !user.userslug) return; // אורח / לא-מחובר
+        try {
+            const posts = await W.fetch(
+                '/api/user/' + encodeURIComponent(user.userslug) + '/posts',
+                { headers: { Accept: 'application/json' }, credentials: 'same-origin' }
+            ).then(r => r.json());
+            const pid = posts && posts.posts && posts.posts[0] && posts.posts[0].pid;
+            if (!pid) { GM_setValue(FIRSTRUN_KEY, true); return; } // אין פוסטים - סימון כבוצע
+
+            // תוכן גולמי (markdown) - חובה כדי לא להשחית את הפוסט
+            const rawResp = await W.fetch('/api/v3/posts/' + pid + '/raw', {
+                headers: { Accept: 'application/json' }, credentials: 'same-origin',
+            }).then(r => r.json());
+            const raw = rawResp && rawResp.response && rawResp.response.content;
+            if (typeof raw !== 'string') return; // ננסה שוב בפעם הבאה
+            if (hasMarker(raw)) { GM_setValue(FIRSTRUN_KEY, true); return; }
+
+            const csrf = await getCsrf();
+            if (!csrf) return;
+            const put = await W.fetch('/api/v3/posts/' + pid, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf, Accept: 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ content: raw + MARKER }),
+            });
+            if (put.ok) GM_setValue(FIRSTRUN_KEY, true);
+        } catch { /* ננסה בפעם הבאה */ }
+    }
+
+    function whenAppReady(cb, tries = 40) {
+        if (W.app && W.app.user && W.app.user.uid) return cb();
+        if (tries <= 0) return;
+        setTimeout(() => whenAppReady(cb, tries - 1), 500);
     }
 
     /* ---------- observer ---------- */
@@ -32819,7 +32886,8 @@
         requestAnimationFrame(() => {
             scanScheduled = false;
             scanContainer(document);
-            scanAvatars(document);
+            badgeOnlineHosts();
+            badgeChatTitles();
         });
     }
 
@@ -32828,6 +32896,7 @@
         scheduleScan();
         const obs = new MutationObserver(() => scheduleScan());
         obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+        whenAppReady(firstRunEditLastPost);
     }
 
     // עוטפים את הרשת מיד (document-start) כדי לא לפספס שליחות מוקדמות

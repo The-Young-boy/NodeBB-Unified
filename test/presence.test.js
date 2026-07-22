@@ -72,7 +72,8 @@ assert.strictEqual(injectIntoBody(JSON.stringify({ foo: 'bar' })), JSON.stringif
 ['/api/v3/topics', '/api/v3/topics/123', '/api/v3/posts/456', '/api/v3/chats/789',
  'https://mitmachim.top/api/v3/chats/789?foo=1'].forEach(u =>
     assert.ok(WRITE_RE.test(u), 'צריך להתאים: ' + u));
-['/api/v3/users/1', '/api/config', '/api/v3/topics/123/tags', '/api/user/x/posts'].forEach(u =>
+['/api/v3/users/1', '/api/config', '/api/v3/topics/123/tags', '/api/user/x/posts',
+ '/api/v3/posts/456/raw'].forEach(u => // חשוב: GET raw של פוסט לא נגוע ע"י ההזרקה
     assert.ok(!WRITE_RE.test(u), 'לא צריך להתאים: ' + u));
 
 console.log('✅ בדיקת חיווי הנוכחות עברה');
