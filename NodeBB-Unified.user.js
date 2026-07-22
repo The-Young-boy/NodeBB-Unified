@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.1.0
+// @version      1.2.0
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -25627,7 +25627,7 @@
         noframes: false,
         enabledByDefault: true,
         requiresReload: true,
-        storageKeys: ["mitmachim_reputation_rankings_v3","mitmachim_reputation_updated_at_v3","mitmachim_reputation_enabled_v3"],
+        storageKeys: ["mitmachim_reputation_rankings_v3","mitmachim_reputation_updated_at_v3","mitmachim_reputation_enabled_v3","mitmachim_reputation_snapshot_v3"],
         sourceSha256: "5e46177bef763f3d1a12931946d1f2dc8815614cd3f2e3ac6c8748cf8865da04",
         originalBodySha256: "05d2dce413380541e7ff69ca091a7b664c1a9f39601a32f8174c5fab5aa588a6",
         embeddedBodySha256: "05d2dce413380541e7ff69ca091a7b664c1a9f39601a32f8174c5fab5aa588a6",
@@ -25675,6 +25675,26 @@
         // הצגת חלונית מידע במעבר עכבר
         enableTooltip: true,
 
+        // דירוג חכם: משקלים וקבועים (ניתנים לשינוי ע"י המשתמש).
+        // ניקוד = רעננות^severity × Σ(משקל × אחוזון_רכיב). נרמול=אחוזון (עמיד לחריגים).
+        // הנוסחה משוכפלת ב-test/ranking.test.js - לעדכן את שניהם יחד.
+        scoring: {
+            enabled: true,          // false = דירוג לפי reputation גולמי (התנהגות ישנה)
+            bayesConfidence: 20,    // C: כמה פוסטים "וירטואליים" בממוצע-האתר ממתנים משתמש חדש
+            velocitySmoothing: 90,  // ימים שמתווספים לגיל למניעת קפיצות אצל חשבונות צעירים
+            recencyHalfLifeDays: 365, // חצי-חיים לדעיכת רעננות: רדום שנה => מכפיל 0.5
+            recencySeverity: 1.0,   // חזקת מכפיל הרעננות
+            weights: {
+                quality: 0.30,      // (R + C·m)/(P + C) - איכות בייסיאנית
+                velocity: 0.18,     // R/(גיל_ימים + smoothing)
+                volume: 0.15,       // log10(1 + R)
+                momentum: 0.12,     // Δ reputation מול snapshot קודם
+                topicQuality: 0.10, // R/(T+5) + T/(P+1)
+                influence: 0.08,    // log(1+צפיות) + log(1+עוקבים)
+                activeSpan: 0.07,   // lastonline - joindate
+            },
+        },
+
         debug: false,
     };
 
@@ -25682,6 +25702,7 @@
         rankings: 'mitmachim_reputation_rankings_v3',
         updatedAt: 'mitmachim_reputation_updated_at_v3',
         enabled: 'mitmachim_reputation_enabled_v3',
+        snapshot: 'mitmachim_reputation_snapshot_v3', // reputation קודם per userslug, למומנטום
     };
 
     const CLASS_NAMES = {
@@ -26784,6 +26805,11 @@
             0
         );
 
+        const num = value => {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
         return {
             userslug,
             username,
@@ -26796,6 +26822,18 @@
             uid:
                 user.uid ??
                 null,
+
+            // שדות לדירוג החכם (computeSmartScores). חלקם לא תמיד קיימים
+            // בתשובת רשימת המשתמשים (רק בפרופיל המלא) - אז נופלים ל-0 ומטופלים כ-neutral.
+            postcount: num(user.postcount ?? user.postCount),
+            topiccount: num(user.topiccount ?? user.topicCount),
+            joindate: num(user.joindate ?? (user.joindateISO && Date.parse(user.joindateISO))),
+            lastonline: num(user.lastonline ?? (user.lastonlineISO && Date.parse(user.lastonlineISO))),
+            profileviews: num(user.profileviews),
+            followerCount: num(user.followerCount ?? user.followercount),
+            banned: !!user.banned,
+            deleted: !!user.deleted,
+            muted: !!(user.muted || (user.mutedUntil && Number(user.mutedUntil) > Date.now())),
         };
     }
 
@@ -27052,11 +27090,124 @@
         return results;
     }
 
+    /* =========================================================
+       דירוג חכם: ניקוד מורכב במקום reputation גולמי
+       הנוסחה משוכפלת ב-test/ranking.test.js - לעדכן את שניהם יחד.
+       ========================================================= */
+
+    // לכל ערך: אחוזון באוכלוסייה (midrank לתיקו). O(n log n).
+    // כל הערכים שווים => כולם 0.5 (neutral).
+    function percentileMap(values) {
+        const n = values.length;
+        if (n <= 1) return values.map(() => 0.5);
+
+        const idx = values.map((_, i) => i).sort((a, b) => values[a] - values[b]);
+        const pct = new Array(n);
+
+        let i = 0;
+        while (i < n) {
+            let j = i;
+            while (j + 1 < n && values[idx[j + 1]] === values[idx[i]]) {
+                j += 1;
+            }
+            const p = ((i + j) / 2) / (n - 1); // מיקום midrank מנורמל 0..1
+            for (let k = i; k <= j; k += 1) {
+                pct[idx[k]] = p;
+            }
+            i = j + 1;
+        }
+
+        return pct;
+    }
+
+    function computeSmartScores(users) {
+        const cfg = CONFIG.scoring;
+        const now = Date.now();
+        const DAY = 86400000;
+
+        const pool = users.filter(
+            u => u?.userslug && !u.banned && !u.deleted && !u.muted
+        );
+        if (!pool.length) {
+            return [];
+        }
+
+        // ממוצע-אתר של reputation לכל פוסט (m) לאיכות הבייסיאנית
+        let sumR = 0;
+        let sumP = 0;
+        for (const u of pool) {
+            sumR += Math.max(0, u.reputation);
+            sumP += Math.max(0, u.postcount);
+        }
+        const m = sumP > 0 ? sumR / sumP : 0;
+
+        const prevSnapshot = GM_getValue(STORAGE.snapshot, {}) || {};
+
+        const raw = pool.map(u => {
+            const R = Math.max(0, u.reputation);
+            const P = Math.max(0, u.postcount);
+            const T = Math.max(0, u.topiccount);
+
+            // חסר joindate => ותק לא ידוע, ברירת-מחדל בינונית. ponytail: קירוב, שפרו אם ה-API יחזיר תמיד joindate
+            const ageDays = u.joindate > 0 ? Math.max(0, (now - u.joindate) / DAY) : 3650;
+            // חסר lastonline => לא מענישים (לא-ידוע != רדום). ponytail
+            const idleDays = u.lastonline > 0 ? Math.max(0, (now - u.lastonline) / DAY) : 0;
+            const spanDays = (u.lastonline > 0 && u.joindate > 0)
+                ? Math.max(0, (u.lastonline - u.joindate) / DAY)
+                : 0;
+
+            const prevR = Number(prevSnapshot[u.userslug]);
+
+            return {
+                u,
+                quality: (R + cfg.bayesConfidence * m) / (P + cfg.bayesConfidence),
+                velocity: R / (ageDays + cfg.velocitySmoothing),
+                volume: Math.log10(1 + R),
+                momentum: Number.isFinite(prevR) ? (R - prevR) : 0, // ריצה ראשונה => 0 => אחוזון neutral
+                topicQuality: R / (T + 5) + T / (P + 1),
+                influence: Math.log(1 + Math.max(0, u.profileviews)) + Math.log(1 + Math.max(0, u.followerCount)),
+                activeSpan: spanDays,
+                recency: Math.pow(0.5, (idleDays / cfg.recencyHalfLifeDays) * cfg.recencySeverity),
+            };
+        });
+
+        const comps = ['quality', 'velocity', 'volume', 'momentum', 'topicQuality', 'influence', 'activeSpan'];
+        const pcts = {};
+        for (const c of comps) {
+            pcts[c] = percentileMap(raw.map(r => r[c]));
+        }
+
+        const scored = raw.map((r, i) => {
+            let base = 0;
+            for (const c of comps) {
+                base += cfg.weights[c] * pcts[c][i];
+            }
+            return { ...r.u, smartScore: base * r.recency };
+        });
+
+        scored.sort((a, b) => b.smartScore - a.smartScore);
+
+        // שמירת reputation הנוכחי ל-snapshot (למומנטום בריצה הבאה)
+        const nextSnapshot = {};
+        for (const u of pool) {
+            nextSnapshot[u.userslug] = u.reputation;
+        }
+        GM_setValue(STORAGE.snapshot, nextSnapshot);
+
+        return scored;
+    }
+
     function createRankingsMap(users) {
         const result = {};
+
+        // דירוג חכם ממיין מחדש; אחרת נשמר סדר ה-API (reputation גולמי)
+        const ordered = CONFIG.scoring.enabled
+            ? computeSmartScores(users)
+            : users;
+
         let rank = 0;
 
-        users.forEach(user => {
+        ordered.forEach(user => {
             if (
                 !user?.userslug ||
                 result[user.userslug]
@@ -27071,6 +27222,9 @@
                 username: user.username,
                 reputation: user.reputation,
                 uid: user.uid,
+                score: Number.isFinite(user.smartScore)
+                    ? Math.round(user.smartScore * 1000) / 1000
+                    : undefined,
             };
         });
 
@@ -32409,5 +32563,291 @@
                 startManager();
             }
         });
+    }
+})();
+
+/* =========================================================
+   חיווי נוכחות "משתמש ב-NodeBB Unified" (presence)
+   מודול עצמאי: מזריק סימן נסתר (בלוק TAG של יוניקוד) לכל פוסט/הודעה
+   יוצאים, מזהה אותו בפוסטים/צ'אט נכנסים, ומוסיף תג-מאומת סגול לאווטאר.
+   ponytail: מודול top-level נפרד במקום שילוב במנהל-המודולים - נגיעה מינימלית בקוד הקיים.
+   ========================================================= */
+(function nodebbUnifiedPresence() {
+    'use strict';
+
+    // גישה לחלון-העמוד האמיתי (לא דרך unsafeWindow.prop - נאסר ע"י בדיקת האבטחה)
+    const W = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+
+    // רץ רק על mitmachim (ה-@match רחב; לא נוגעים ב-fetch של אתרים אחרים)
+    if (!/(^|\.)mitmachim\.top$/i.test(location.hostname)) {
+        return;
+    }
+
+    const MAGIC = 'nbbu';
+    const VERSION = 1;
+    const TAG_BASE = 0xE0000; // כל תו ASCII X מקודד כ-U+E0000+X (בלתי-נראה, שורד את הסניטייזר)
+
+    const ENABLED_KEY = 'nbbu_presence_enabled_v1';
+    const CACHE_KEY = 'nbbu_presence_cache_v1'; // { uid: { isUser, key } }  key=pid/mid אחרון שנראה
+
+    let enabled = GM_getValue(ENABLED_KEY, true);
+
+    /* ---------- קידוד/פענוח הסימן ---------- */
+    // הנוסחה: magic+version כמחרוזת ASCII, כל תו -> תו-TAG. לעתיד אפשר להוסיף ".payload".
+    function buildMarker() {
+        const s = MAGIC + VERSION; // "nbbu1"
+        let out = '';
+        for (const ch of s) {
+            out += String.fromCodePoint(TAG_BASE + ch.charCodeAt(0));
+        }
+        return out;
+    }
+    const MARKER = buildMarker();
+
+    function decodeMarker(text) {
+        if (!text) return null;
+        let ascii = '';
+        for (const ch of text) {
+            const cp = ch.codePointAt(0);
+            if (cp >= TAG_BASE && cp <= TAG_BASE + 0x7f) {
+                ascii += String.fromCharCode(cp - TAG_BASE);
+            }
+        }
+        if (!ascii.startsWith(MAGIC)) return null;
+        const ver = parseInt(ascii.slice(MAGIC.length), 10);
+        return { version: Number.isFinite(ver) ? ver : 0 };
+    }
+    const hasMarker = text => !!decodeMarker(text);
+
+    /* ---------- הזרקה לתוכן יוצא (fetch + XHR) ---------- */
+    // עורך רק את גוף ה-write-API של NodeBB: content (פוסט/נושא/עריכה) או message (צ'אט).
+    const WRITE_RE = /\/api\/v3\/(topics(\/\d+)?|posts\/\d+|chats\/\d+)\/?(\?.*)?$/;
+
+    function injectIntoBody(bodyStr) {
+        if (typeof bodyStr !== 'string' || !bodyStr) return bodyStr;
+        let data;
+        try {
+            data = JSON.parse(bodyStr);
+        } catch {
+            return bodyStr; // גוף לא-JSON (למשל FormData) - לא נוגעים. ponytail
+        }
+        if (!data || typeof data !== 'object') return bodyStr;
+
+        const field = typeof data.content === 'string'
+            ? 'content'
+            : (typeof data.message === 'string' ? 'message' : null);
+        if (!field) return bodyStr;
+        if (hasMarker(data[field])) return bodyStr; // idempotent
+
+        data[field] = data[field] + MARKER;
+        try {
+            return JSON.stringify(data);
+        } catch {
+            return bodyStr;
+        }
+    }
+
+    function wrapNetwork() {
+        // fetch
+        const origFetch = W.fetch;
+        if (typeof origFetch === 'function' && !origFetch.__nbbuWrapped) {
+            const wrapped = function (input, init) {
+                try {
+                    if (enabled && init && typeof init.body === 'string') {
+                        const url = typeof input === 'string' ? input : (input && input.url) || '';
+                        if (WRITE_RE.test(url)) {
+                            init = Object.assign({}, init, { body: injectIntoBody(init.body) });
+                        }
+                    }
+                } catch { /* fail-open: לא חוסמים שליחה */ }
+                return origFetch.call(this, input, init);
+            };
+            wrapped.__nbbuWrapped = true;
+            W.fetch = wrapped;
+        }
+
+        // XMLHttpRequest (jQuery ajax)
+        const XHR = W.XMLHttpRequest;
+        if (XHR && XHR.prototype && !XHR.prototype.__nbbuWrapped) {
+            const origOpen = XHR.prototype.open;
+            const origSend = XHR.prototype.send;
+            XHR.prototype.open = function (method, url, ...rest) {
+                this.__nbbuUrl = url;
+                return origOpen.call(this, method, url, ...rest);
+            };
+            XHR.prototype.send = function (body) {
+                try {
+                    if (enabled && typeof body === 'string' && WRITE_RE.test(this.__nbbuUrl || '')) {
+                        body = injectIntoBody(body);
+                    }
+                } catch { /* fail-open */ }
+                return origSend.call(this, body);
+            };
+            XHR.prototype.__nbbuWrapped = true;
+        }
+    }
+
+    /* ---------- מטמון נוכחות (uid -> {isUser, key}) ---------- */
+    let cache = {};
+    try {
+        cache = GM_getValue(CACHE_KEY, {}) || {};
+    } catch { cache = {}; }
+
+    let flushTimer = null;
+    function scheduleFlush() {
+        if (flushTimer) return;
+        flushTimer = setTimeout(() => {
+            flushTimer = null;
+            try { GM_setValue(CACHE_KEY, cache); } catch { /* מלא? מתעלמים */ }
+        }, 3000);
+    }
+
+    // אמת = הפוסט/הודעה הכי חדשים שנראו (key מונוטוני: pid/mid). אין TTL - מתכלה מעצמו:
+    // אם החדש ביותר בלי סימן => לא-משתמש, גם אם ישן יותר היה מסומן.
+    function recordPresence(uid, key, isUser) {
+        uid = String(uid || '');
+        key = Number(key);
+        if (!uid || !Number.isFinite(key)) return;
+        const prev = cache[uid];
+        if (prev && Number(prev.key) > key) return; // ראינו כבר משהו חדש יותר
+        if (prev && Number(prev.key) === key && prev.isUser === isUser) return;
+        cache[uid] = { isUser: !!isUser, key };
+        scheduleFlush();
+        if (isUser) renderBadgesForUid(uid);
+    }
+
+    /* ---------- סריקת פוסטים/צ'אט לזיהוי הסימן ---------- */
+    function scanContainer(root) {
+        if (!(root instanceof Element) && root !== document) return;
+        const scope = root === document ? document : root;
+
+        // פוסטים
+        scope.querySelectorAll('[component="post"][data-pid]').forEach(post => {
+            const uid = post.getAttribute('data-uid');
+            if (!uid || uid === '0') return;
+            const body = post.querySelector('[component="post/content"]') || post;
+            recordPresence(uid, post.getAttribute('data-pid'), hasMarker(body.textContent));
+        });
+
+        // הודעות צ'אט
+        scope.querySelectorAll('[component="chat/message"][data-mid]').forEach(msg => {
+            const host = msg.closest('[data-uid]') || msg.querySelector('[data-uid]');
+            const uid = (host && host.getAttribute('data-uid')) || msg.getAttribute('data-uid');
+            if (!uid || uid === '0') return;
+            recordPresence(uid, msg.getAttribute('data-mid'), hasMarker(msg.textContent));
+        });
+    }
+
+    /* ---------- תג-מאומת סגול על האווטאר ---------- */
+    const BADGE_CLASS = 'nbbu-presence-badge';
+    const HOST_CLASS = 'nbbu-presence-host';
+
+    function addStyles() {
+        if (document.getElementById('nbbu-presence-style')) return;
+        const style = document.createElement('style');
+        style.id = 'nbbu-presence-style';
+        // תג-מאומת (וי בתוך עיגול סגול), בפינה הנגדית לנקודת ה"מחובר" (ברירת מחדל: פינה עליונה).
+        // ponytail: מיקום פינה קבוע - אם צריך בדיוק מול נקודת-המחובר, לכוונן top/inset-inline.
+        style.textContent = `
+            .${HOST_CLASS} { position: relative !important; overflow: visible !important; }
+            .${BADGE_CLASS} {
+                position: absolute !important;
+                top: -2px !important;
+                inset-inline-start: -2px !important;
+                width: 14px !important; height: 14px !important;
+                border-radius: 50% !important;
+                background: #8b5cf6 !important;
+                border: 2px solid #fff !important;
+                box-sizing: border-box !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                z-index: 10000 !important; pointer-events: auto !important;
+                box-shadow: 0 1px 3px rgba(0,0,0,.35) !important;
+            }
+            .${BADGE_CLASS} svg { width: 9px !important; height: 9px !important; display: block !important; }
+        `;
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+        + '<path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    function avatarUid(avatar) {
+        const host = avatar.closest('[data-uid]');
+        if (host) return host.getAttribute('data-uid');
+        const link = avatar.closest('a[href*="/user/"]');
+        // אין data-uid ישיר; משאירים ל-uid בלבד (username->uid לא נפתר כאן). ponytail
+        return link ? '' : '';
+    }
+
+    function attachBadge(avatar) {
+        const uid = avatarUid(avatar);
+        if (!uid || !cache[uid] || !cache[uid].isUser) return;
+        const host = avatar.closest('[component="user/picture"]') || avatar.parentElement;
+        if (!host || host.querySelector(':scope > .' + BADGE_CLASS)) return;
+        host.classList.add(HOST_CLASS);
+        const badge = document.createElement('span');
+        badge.className = BADGE_CLASS;
+        badge.title = 'משתמש ב-NodeBB Unified';
+        badge.innerHTML = CHECK_SVG;
+        host.appendChild(badge);
+    }
+
+    function scanAvatars(root) {
+        const scope = (root instanceof Element) ? root : document;
+        scope.querySelectorAll('[component="user/picture"], img.avatar, [class*="avatar"] img').forEach(avatar => {
+            const img = avatar.tagName === 'IMG' ? avatar : avatar;
+            try { attachBadge(img); } catch { /* אווטאר בעייתי - דילוג */ }
+        });
+    }
+
+    function renderBadgesForUid(uid) {
+        document.querySelectorAll(`[data-uid="${CSS.escape(String(uid))}"]`).forEach(host => {
+            const avatar = host.matches('[component="user/picture"], img.avatar')
+                ? host
+                : host.querySelector('[component="user/picture"], img.avatar');
+            if (avatar) {
+                try { attachBadge(avatar); } catch { /* דילוג */ }
+            }
+        });
+    }
+
+    /* ---------- observer ---------- */
+    let scanScheduled = false;
+    function scheduleScan() {
+        if (scanScheduled) return;
+        scanScheduled = true;
+        requestAnimationFrame(() => {
+            scanScheduled = false;
+            scanContainer(document);
+            scanAvatars(document);
+        });
+    }
+
+    function start() {
+        addStyles();
+        scheduleScan();
+        const obs = new MutationObserver(() => scheduleScan());
+        obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    }
+
+    // עוטפים את הרשת מיד (document-start) כדי לא לפספס שליחות מוקדמות
+    wrapNetwork();
+
+    // toggle דרך תפריט הסקריפט (opt-in, ברירת מחדל דלוק)
+    try {
+        GM_registerMenuCommand(
+            (enabled ? '✓ ' : '') + 'חיווי נוכחות NodeBB Unified (הפעלה/כיבוי)',
+            () => {
+                enabled = !enabled;
+                GM_setValue(ENABLED_KEY, enabled);
+                location.reload();
+            }
+        );
+    } catch { /* אין תמיכה בתפריט - לא קריטי */ }
+
+    if (document.body) {
+        start();
+    } else {
+        document.addEventListener('DOMContentLoaded', start, { once: true });
     }
 })();
