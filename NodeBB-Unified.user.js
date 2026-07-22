@@ -32740,9 +32740,6 @@
     const BADGE_CLASS = 'nbbu-presence-badge';
     const BADGE_HOST_CLASS = 'nbbu-presence-host';
     const CHAT_MARK_CLASS = 'nbbu-presence-chatmark';
-    // מודול "מחובר" מסמן כל אלמנט שמקבל נקודת-חיווי-חיבור במחלקה הזאת.
-    // התג עולה רק עליהם => בדיוק היכן שיש נקודת-חיווי (אווטאר-ליד-פוסט + דף-משתמש), לא על כל אווטאר.
-    const ONLINE_HOST = 'moishy-online-status-host';
     const TOOLTIP = 'משתמש ב-NodeBB Unified';
 
     function addStyles() {
@@ -32781,26 +32778,43 @@
 
     const myUid = () => String((W.app && W.app.user && W.app.user.uid) || '');
 
-    const inChat = el => !!el.closest(
-        '[component="chat/message-window"], [component="chat/messages"], .chat-modal, .chats-container, [component="chat/recent"]'
-    );
-
     // תג על האווטאר: רק היכן שמודול-המחובר הניח נקודת-חיווי, ולא בצ'אט (בצ'אט - שורת הכותרת בלבד)
-    function badgeOnlineHosts() {
-        document.querySelectorAll('.' + ONLINE_HOST).forEach(host => {
-            if (host.querySelector(':scope > .' + BADGE_CLASS)) return;
-            if (inChat(host)) return;
-            const uidEl = host.matches('[data-uid]')
-                ? host
-                : (host.closest('[data-uid]') || host.querySelector('[data-uid]'));
-            const uid = uidEl && uidEl.getAttribute('data-uid');
-            if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
-            host.classList.add(BADGE_HOST_CLASS);
-            const badge = document.createElement('span');
-            badge.className = BADGE_CLASS;
-            badge.title = TOOLTIP;
-            badge.innerHTML = CHECK_SVG;
-            host.appendChild(badge);
+    // אזורים שאסור לשים בהם תג-אווטאר (הצ'אט מטופל בשורת-הכותרת; השאר לא רלוונטי)
+    const BLOCK_SEL = [
+        '[component="chat/message-window"]', '[component="chat/messages"]',
+        '.chat-modal', '.chats-container', '[component="chat/recent"]',
+        'nav', '.sidebar', '.sidebar-left', '.sidebar-right', '[component="sidebar/right"]',
+        '.dropdown-menu', '[component="header/menu"]',
+        '.user-card', '[component="user/card"]', '.popover', '.tooltip'
+    ].join(',');
+
+    // ה-uid הרלוונטי לאווטאר לפי ההקשר: uid של הפוסט, או uid הפרופיל בדף-המשתמש. אחרת ריק.
+    function contextUid(avatar) {
+        const post = avatar.closest('[component="post"]');
+        if (post) return post.getAttribute('data-uid') || '';
+        if (/^\/user\//i.test(location.pathname) &&
+            avatar.closest('[component="account/cover"], [component="account/picture"], .account-block, .account-username-box, header')) {
+            return String((W.ajaxify && W.ajaxify.data && W.ajaxify.data.uid) || '');
+        }
+        return '';
+    }
+
+    // תג רק על אווטאר-ליד-פוסט ובדף-המשתמש (היכן שיש נקודת-חיווי), פינה ימנית-תחתונה
+    function badgeAvatars() {
+        document.querySelectorAll('[component="user/picture"], img.avatar').forEach(avatar => {
+            try {
+                if (avatar.closest(BLOCK_SEL)) return;
+                const uid = contextUid(avatar);
+                if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
+                const host = avatar.closest('[component="user/picture"]') || avatar.parentElement;
+                if (!host || host.querySelector(':scope > .' + BADGE_CLASS)) return;
+                host.classList.add(BADGE_HOST_CLASS);
+                const badge = document.createElement('span');
+                badge.className = BADGE_CLASS;
+                badge.title = TOOLTIP;
+                badge.innerHTML = CHECK_SVG;
+                host.appendChild(badge);
+            } catch { /* אווטאר בעייתי - דילוג */ }
         });
     }
 
@@ -32885,7 +32899,7 @@
         requestAnimationFrame(() => {
             scanScheduled = false;
             scanContainer(document);
-            badgeOnlineHosts();
+            badgeAvatars();
             badgeChatTitles();
         });
     }
