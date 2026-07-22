@@ -32750,9 +32750,15 @@
             const uid = post.getAttribute('data-uid');
             if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
             try {
-                const img = post.querySelector('a[href*="/user/"] img');
-                // מצמידים לעוטף ה-<a> (לא נחתך), לא ל-.avatar עצמו
-                attachBadgeToAvatar(img, img && img.closest('a[href*="/user/"]'));
+                // אווטאר-המחבר קיים גם בפוסטי-המשך (עוקבים מאותו מחבר) עם component="avatar/picture",
+                // אבל שם הוא לא עטוף ב-<a href="/user/">. הראשון ב-DOM הוא של המחבר (לא ציטוט).
+                const img = post.querySelector('img[component="avatar/picture"]')
+                    || post.querySelector('a[href*="/user/"] img');
+                if (!img) return;
+                const host = img.closest('a[href*="/user/"]')
+                    || img.closest('.rounded-circle, .avatar-wrapper, [component="user/picture"]')
+                    || img.parentElement;
+                attachBadgeToAvatar(img, host);
             } catch { /* דילוג */ }
         });
 
