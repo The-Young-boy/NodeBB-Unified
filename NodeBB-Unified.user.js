@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.2.0
+// @version      1.3.0
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -4457,7 +4457,7 @@
             }
 
             #${SIDEBAR_ITEM_ID} .mtpun-sidebar-icon {
-                color: var(--bs-primary, #0d6efd);
+                color: inherit;  /* ניטרלי כמו שאר כפתורי-הניווט, לא primary צבוע */
                 font-size: 16px;
                 line-height: 1;
             }
@@ -32597,6 +32597,10 @@
 
     let enabled = GM_getValue(ENABLED_KEY, true);
 
+    // לוגים לאבחון (ניתן לכבות: GM_setValue('nbbu_presence_debug', false))
+    const DEBUG = GM_getValue('nbbu_presence_debug', true);
+    const log = (...a) => { if (DEBUG) console.log('%c[NBBU presence]', 'color:#8b5cf6;font-weight:700', ...a); };
+
     /* ---------- קידוד/פענוח הסימן ---------- */
     // הנוסחה: magic+version כמחרוזת ASCII, כל תו -> תו-TAG. לעתיד אפשר להוסיף ".payload".
     function buildMarker() {
@@ -32645,11 +32649,38 @@
         if (hasMarker(data[field])) return bodyStr; // idempotent
 
         data[field] = data[field] + MARKER;
+        log('הוזרק סימן ל-' + field + ' (fetch/XHR)');
         try {
             return JSON.stringify(data);
         } catch {
             return bodyStr;
         }
+    }
+
+    // NodeBB שולח פוסטים/עריכות/צ'אט דרך socket.io, לא REST - חייבים לעטוף גם את socket.emit
+    const SOCKET_EVENTS = {
+        'posts.reply': 'content',
+        'topics.post': 'content',
+        'posts.edit': 'content',
+        'modules.chats.send': 'message',
+    };
+    function wrapSocket() {
+        const s = W.socket;
+        if (!s || typeof s.emit !== 'function' || s.emit.__nbbuWrapped) return !!(s && s.emit && s.emit.__nbbuWrapped);
+        const orig = s.emit;
+        s.emit = function (event, data, ...rest) {
+            try {
+                const field = enabled && SOCKET_EVENTS[event];
+                if (field && data && typeof data === 'object' && typeof data[field] === 'string' && !hasMarker(data[field])) {
+                    data[field] = data[field] + MARKER;
+                    log('הוזרק סימן ל-' + field + ' דרך socket:' + event);
+                }
+            } catch { /* fail-open */ }
+            return orig.apply(this, [event, data, ...rest]);
+        };
+        s.emit.__nbbuWrapped = true;
+        log('socket.emit נעטף');
+        return true;
     }
 
     function wrapNetwork() {
@@ -32859,35 +32890,38 @@
     }
 
     async function firstRunEditLastPost() {
-        if (!enabled || GM_getValue(FIRSTRUN_KEY, false)) return;
+        if (!enabled) { log('ריצה-ראשונה: מכובה'); return; }
+        if (GM_getValue(FIRSTRUN_KEY, false)) { log('ריצה-ראשונה: כבר בוצעה בעבר'); return; }
         const user = W.app && W.app.user;
-        if (!user || !user.uid || !user.userslug) return; // אורח / לא-מחובר
+        if (!user || !user.uid || !user.userslug) { log('ריצה-ראשונה: אין משתמש מחובר'); return; }
         try {
             const posts = await W.fetch(
                 '/api/user/' + encodeURIComponent(user.userslug) + '/posts',
                 { headers: { Accept: 'application/json' }, credentials: 'same-origin' }
             ).then(r => r.json());
             const pid = posts && posts.posts && posts.posts[0] && posts.posts[0].pid;
-            if (!pid) { GM_setValue(FIRSTRUN_KEY, true); return; } // אין פוסטים - סימון כבוצע
+            if (!pid) { log('ריצה-ראשונה: לא נמצאו פוסטים למשתמש', posts); GM_setValue(FIRSTRUN_KEY, true); return; }
+            log('ריצה-ראשונה: פוסט אחרון pid=' + pid);
 
             // תוכן גולמי (markdown) - חובה כדי לא להשחית את הפוסט
             const rawResp = await W.fetch('/api/v3/posts/' + pid + '/raw', {
                 headers: { Accept: 'application/json' }, credentials: 'same-origin',
             }).then(r => r.json());
             const raw = rawResp && rawResp.response && rawResp.response.content;
-            if (typeof raw !== 'string') return; // ננסה שוב בפעם הבאה
-            if (hasMarker(raw)) { GM_setValue(FIRSTRUN_KEY, true); return; }
+            if (typeof raw !== 'string') { log('ריצה-ראשונה: לא התקבל תוכן גולמי', rawResp); return; }
+            if (hasMarker(raw)) { log('ריצה-ראשונה: הפוסט כבר מסומן'); GM_setValue(FIRSTRUN_KEY, true); return; }
 
             const csrf = await getCsrf();
-            if (!csrf) return;
+            if (!csrf) { log('ריצה-ראשונה: אין csrf token'); return; }
             const put = await W.fetch('/api/v3/posts/' + pid, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf, Accept: 'application/json' },
                 credentials: 'same-origin',
                 body: JSON.stringify({ content: raw + MARKER }),
             });
+            log('ריצה-ראשונה: PUT עריכת פוסט ' + pid + ' -> ' + put.status);
             if (put.ok) GM_setValue(FIRSTRUN_KEY, true);
-        } catch { /* ננסה בפעם הבאה */ }
+        } catch (e) { log('ריצה-ראשונה: שגיאה', e); }
     }
 
     function whenAppReady(cb, tries = 40) {
@@ -32898,6 +32932,12 @@
 
     /* ---------- observer ---------- */
     let scanScheduled = false;
+    let lastVerifiedCount = -1;
+    function verifiedCount() {
+        let n = 0;
+        for (const uid in cache) { if (cache[uid] && cache[uid].isUser) n += 1; }
+        return n;
+    }
     function scheduleScan() {
         if (scanScheduled) return;
         scanScheduled = true;
@@ -32906,10 +32946,16 @@
             scanContainer(document);
             badgeAvatars();
             badgeChatTitles();
+            const vc = verifiedCount();
+            if (vc !== lastVerifiedCount) {
+                lastVerifiedCount = vc;
+                log('משתמשים מאומתים במטמון: ' + vc, Object.keys(cache).filter(u => cache[u].isUser));
+            }
         });
     }
 
     function start() {
+        log('התחיל. סימן=' + [...MARKER].length + ' תווי-TAG, מאומתים במטמון=' + verifiedCount());
         addStyles();
         scheduleScan();
         const obs = new MutationObserver(() => scheduleScan());
@@ -32919,6 +32965,11 @@
 
     // עוטפים את הרשת מיד (document-start) כדי לא לפספס שליחות מוקדמות
     wrapNetwork();
+    // ה-socket נטען אסינכרונית - עוטפים ברגע שהוא זמין
+    (function pollSocket(tries = 60) {
+        if (wrapSocket() || tries <= 0) return;
+        setTimeout(() => pollSocket(tries - 1), 500);
+    })();
 
     // toggle דרך תפריט הסקריפט (opt-in, ברירת מחדל דלוק)
     try {
