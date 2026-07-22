@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.3.2
+// @version      1.3.3
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -32587,7 +32587,7 @@
     const TAG_BASE = 0xE0000; // כל תו ASCII X מקודד כ-U+E0000+X (בלתי-נראה, שורד את הסניטייזר)
 
     const ENABLED_KEY = 'nbbu_presence_enabled_v1';
-    const CACHE_KEY = 'nbbu_presence_cache_v1'; // { uid: { isUser, key } }  key=pid/mid אחרון שנראה
+    const CACHE_KEY = 'nbbu_presence_cache_v2'; // { uid: { isUser, key } }  key=pid/mid אחרון שנראה (v2: איפוס מטמון ישן)
 
     let enabled = GM_getValue(ENABLED_KEY, true);
 
@@ -32688,13 +32688,25 @@
         }, 3000);
     }
 
-    // אמת = הפוסט/הודעה הכי חדשים שנראו (key מונוטוני: pid/mid). אין TTL - מתכלה מעצמו:
-    // אם החדש ביותר בלי סימן => לא-משתמש, גם אם ישן יותר היה מסומן.
+    // אמת: הסימן הוא בלוק-TAG => הוכחה חיובית עם אפס false-positive. ברירת מחדל "sticky":
+    // ברגע שנראה פוסט/הודעה מסומנים מ-uid, נועלים אותו כמשתמש. הכלל המתכלה-מעצמו
+    // (הפוסט-האחרון-קובע) פחות אמין בהטמעה - ההזרקה לא רצה על פוסטים ישנים/נתיב-socket,
+    // אז "החדש-ביותר-בלי-סימן" נותן בעיקר false-negative. למי שרוצה אותו:
+    // GM_setValue('nbbu_presence_strict_latest', true).
+    const STRICT_LATEST = GM_getValue('nbbu_presence_strict_latest', false);
     function recordPresence(uid, key, isUser) {
         uid = String(uid || '');
         key = Number(key);
         if (!uid || !Number.isFinite(key)) return;
         const prev = cache[uid];
+        if (!STRICT_LATEST) {
+            if (prev && prev.isUser) return;      // כבר הוכח כמשתמש - נעול
+            if (!isUser && prev) return;          // אין שינוי (נשאר לא-משתמש)
+            cache[uid] = { isUser: !!isUser, key };
+            scheduleFlush();
+            return;
+        }
+        // strict: הפוסט/הודעה הכי חדשים קובעים (key מונוטוני; אין TTL - מתכלה מעצמו)
         if (prev && Number(prev.key) > key) return; // ראינו כבר משהו חדש יותר
         if (prev && Number(prev.key) === key && prev.isUser === isUser) return;
         cache[uid] = { isUser: !!isUser, key };

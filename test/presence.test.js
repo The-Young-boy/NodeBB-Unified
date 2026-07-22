@@ -76,4 +76,22 @@ assert.strictEqual(injectIntoBody(JSON.stringify({ foo: 'bar' })), JSON.stringif
  '/api/v3/posts/456/raw'].forEach(u => // חשוב: GET raw של פוסט לא נגוע ע"י ההזרקה
     assert.ok(!WRITE_RE.test(u), 'לא צריך להתאים: ' + u));
 
+// --- זיהוי sticky: סימן = נעילה חיובית, פוסט חדש בלי סימן לא מבטל ---
+function recordSticky(cache, uid, key, isUser) {
+    const prev = cache[uid];
+    if (prev && prev.isUser) return;      // נעול כמשתמש
+    if (!isUser && prev) return;          // נשאר לא-משתמש
+    cache[uid] = { isUser: !!isUser, key };
+}
+{
+    const c = {};
+    // רשומה ישנה false עם key גבוה (בעיית ההטמעה) - סימן ישן יותר עדיין נועל
+    recordSticky(c, '439', 9999, false);
+    recordSticky(c, '439', 1208705, true);
+    assert.strictEqual(c['439'].isUser, true, 'סימן נועל למשתמש למרות key נמוך יותר');
+    // פוסט חדש בלי סימן לא מבטל את הנעילה
+    recordSticky(c, '439', 999999, false);
+    assert.strictEqual(c['439'].isUser, true, 'פוסט חדש בלי סימן לא מבטל נעילה');
+}
+
 console.log('✅ בדיקת חיווי הנוכחות עברה');
