@@ -32784,44 +32784,43 @@
 
     const myUid = () => String((W.app && W.app.user && W.app.user.uid) || '');
 
-    // תג על האווטאר: רק היכן שמודול-המחובר הניח נקודת-חיווי, ולא בצ'אט (בצ'אט - שורת הכותרת בלבד)
-    // אזורים שאסור לשים בהם תג-אווטאר (הצ'אט מטופל בשורת-הכותרת; השאר לא רלוונטי)
-    const BLOCK_SEL = [
-        '[component="chat/message-window"]', '[component="chat/messages"]',
-        '.chat-modal', '.chats-container', '[component="chat/recent"]',
-        'nav', '.sidebar', '.sidebar-left', '.sidebar-right', '[component="sidebar/right"]',
-        '.dropdown-menu', '[component="header/menu"]',
-        '.user-card', '[component="user/card"]', '.popover', '.tooltip'
-    ].join(',');
-
-    // ה-uid הרלוונטי לאווטאר לפי ההקשר: uid של הפוסט, או uid הפרופיל בדף-המשתמש. אחרת ריק.
-    function contextUid(avatar) {
-        const post = avatar.closest('[component="post"]');
-        if (post) return post.getAttribute('data-uid') || '';
-        if (/^\/user\//i.test(location.pathname) &&
-            avatar.closest('[component="account/cover"], [component="account/picture"], .account-block, .account-username-box, header')) {
-            return String((W.ajaxify && W.ajaxify.data && W.ajaxify.data.uid) || '');
-        }
-        return '';
+    // האווטארים באתר הם <img> פשוט בתוך .rounded-circle / .avatar-wrapper (לא img.avatar
+    // ולא [component="user/picture"]). לכן ניגשים context-first: מאתרים את אווטאר-המחבר
+    // בתוך הפוסט, ואת אווטאר-הכותרת בדף-המשתמש, ומצמידים לעטיפה העגולה.
+    function attachBadgeToAvatar(img) {
+        if (!img) return;
+        const host = img.closest('.rounded-circle, .avatar-wrapper, [component="user/picture"]') || img.parentElement;
+        if (!host || host.querySelector(':scope > .' + BADGE_CLASS)) return;
+        host.classList.add(BADGE_HOST_CLASS);
+        const badge = document.createElement('span');
+        badge.className = BADGE_CLASS;
+        badge.title = TOOLTIP;
+        badge.innerHTML = CHECK_SVG;
+        host.appendChild(badge);
     }
 
-    // תג רק על אווטאר-ליד-פוסט ובדף-המשתמש (היכן שיש נקודת-חיווי), פינה ימנית-תחתונה
     function badgeAvatars() {
-        document.querySelectorAll('[component="user/picture"], img.avatar').forEach(avatar => {
+        // אווטאר מחבר בכל פוסט (ה-uid מהפוסט; האווטאר הוא ה-img בקישור-המשתמש בכותרת)
+        document.querySelectorAll('[component="post"]').forEach(post => {
+            const uid = post.getAttribute('data-uid');
+            if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
             try {
-                if (avatar.closest(BLOCK_SEL)) return;
-                const uid = contextUid(avatar);
-                if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
-                const host = avatar.closest('[component="user/picture"]') || avatar.parentElement;
-                if (!host || host.querySelector(':scope > .' + BADGE_CLASS)) return;
-                host.classList.add(BADGE_HOST_CLASS);
-                const badge = document.createElement('span');
-                badge.className = BADGE_CLASS;
-                badge.title = TOOLTIP;
-                badge.innerHTML = CHECK_SVG;
-                host.appendChild(badge);
-            } catch { /* אווטאר בעייתי - דילוג */ }
+                attachBadgeToAvatar(post.querySelector('a[href*="/user/"] img'));
+            } catch { /* דילוג */ }
         });
+
+        // אווטאר בכותרת דף-המשתמש (ה-uid מ-ajaxify)
+        if (/^\/user\//i.test(location.pathname)) {
+            const uid = String((W.ajaxify && W.ajaxify.data && W.ajaxify.data.uid) || '');
+            if (uid && cache[uid] && cache[uid].isUser) {
+                try {
+                    attachBadgeToAvatar(
+                        document.querySelector('.border-bottom .avatar-wrapper > img')
+                        || document.querySelector('.avatar-wrapper > img')
+                    );
+                } catch { /* דילוג */ }
+            }
+        }
     }
 
     // בצ'אט: וי כהמשך לשורת הכותרת #chat-room-title-<roomId>, אם הצד-השני משתמש בסקריפט
