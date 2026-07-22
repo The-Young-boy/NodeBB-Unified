@@ -4486,6 +4486,12 @@
                 box-sizing: border-box;
             }
 
+            /* אין badge של מונה על אייקון-הניווט - מבלבל כמו התראה שלא נקראה */
+            #${SIDEBAR_ITEM_ID} .mtpun-sidebar-count,
+            #${SIDEBAR_ITEM_ID} .mtpun-floating-count {
+                display: none !important;
+            }
+
             body > .mtpun-floating-button {
                 visibility: hidden !important;
             }
@@ -4719,15 +4725,15 @@
             'המשתמשים המסומנים שלי'
         );
 
-        // ה-badge של המונה מופיע רק כשיש משתמשים מסומנים בפועל.
-        // אחרת "0" כחול נראה כמו התראת-הודעה חדשה.
+        // בלי badge של מונה: זה אייקון-ניווט, לא מונה-התראות. עיגול צבעוני עם מספר
+        // נראה כמו הודעה חדשה שלא נקראה ומבלבל. (count עדיין נקרא לצרכים אחרים)
+        void count;
         button.innerHTML = `
             <span class="mtpun-sidebar-icon-wrapper">
                 <i
                     class="fa fa-fw fa-note-sticky mtpun-sidebar-icon"
                     aria-hidden="true"
                 ></i>
-                ${count > 0 ? `<span class="mtpun-sidebar-count">${count}</span>` : ''}
             </span>
         `;
     }
