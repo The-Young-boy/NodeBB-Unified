@@ -29114,6 +29114,205 @@
 })();
 /* SOURCE_END: אישור דיסלייק.txt */
         }
+    },
+
+    {
+        id: "peer-detection",
+        name: "מתמחים טופ - זיהוי הדדי בין משתמשי הסקריפט",
+        description: "מזהה ומציג אינדיקטור על משתמשים אחרים בפורום שמתקינים ומשתמשים בסקריפט NodeBB Unified",
+        category: "קהילה ואינטראקציה",
+        originalFile: "זיהוי הדדי בין משתמשים.txt",
+        version: "1.0.0",
+        author: "Amlaach & Moishy",
+        runAt: "document-idle",
+        matches: ["https://mitmachim.top/*","https://www.mitmachim.top/*"],
+        noframes: false,
+        enabledByDefault: true,
+        requiresReload: true,
+        storageKeys: ["mitmachim_peer_detection_enabled_v1"],
+        sourceSha256: "",
+        originalBodySha256: "",
+        embeddedBodySha256: "",
+        mergeChanges: [],
+        factory: function (
+            GM_getValue,
+            GM_setValue,
+            GM_deleteValue,
+            GM_listValues,
+            GM_addStyle,
+            GM_registerMenuCommand,
+            GM_notification,
+            GM_xmlhttpRequest,
+            GM_setClipboard,
+            unsafeWindow,
+            window,
+            $,
+            jQuery
+        ) {
+/* SOURCE_START: זיהוי הדדי בין משתמשים.txt */
+(function () {
+    'use strict';
+
+    const CONFIG = {
+        enabledKey: 'mitmachim_peer_detection_enabled_v1',
+        fingerprint: '\u200B\uFEFF\u200B\u200C\u200B',
+        badgeClass: 'mt-peer-badge-v1',
+        handledAttribute: 'data-mt-peer-checked-v1'
+    };
+
+    let enabled = GM_getValue(CONFIG.enabledKey, true);
+    if (!enabled) return;
+
+    GM_addStyle(`
+        .${CONFIG.badgeClass} {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background-color: rgba(13, 202, 240, 0.12);
+            color: #0dcaf0;
+            border: 1px solid rgba(13, 202, 240, 0.3);
+            margin-right: 6px;
+            margin-left: 6px;
+            vertical-align: middle;
+            user-select: none;
+        }
+        [data-bs-theme="dark"] .${CONFIG.badgeClass},
+        .dark .${CONFIG.badgeClass} {
+            background-color: rgba(13, 202, 240, 0.2);
+            color: #6edff6;
+            border-color: rgba(110, 223, 246, 0.4);
+        }
+    `);
+
+    const detectedUids = new Set();
+
+    function attachFingerprintListeners() {
+        document.addEventListener('submit', function (event) {
+            const form = event.target;
+            if (!(form instanceof HTMLElement)) return;
+
+            const textareas = form.querySelectorAll('textarea');
+            textareas.forEach(textarea => {
+                if (textarea.value && !textarea.value.includes(CONFIG.fingerprint)) {
+                    textarea.value = textarea.value + CONFIG.fingerprint;
+                }
+            });
+        }, true);
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                const textarea = event.target;
+                if (textarea instanceof HTMLTextAreaElement && textarea.matches('[component="chat/input"], .chat-input textarea')) {
+                    if (textarea.value && !textarea.value.includes(CONFIG.fingerprint)) {
+                        textarea.value = textarea.value + CONFIG.fingerprint;
+                    }
+                }
+            }
+        }, true);
+    }
+
+    function getCleanPostText(element) {
+        const clone = element.cloneNode(true);
+        clone.querySelectorAll('blockquote').forEach(bq => bq.remove());
+        return clone.textContent || '';
+    }
+
+    function scanAndRenderBadges() {
+        const posts = document.querySelectorAll('[component="post"]:not([' + CONFIG.handledAttribute + '])');
+        posts.forEach(post => {
+            post.setAttribute(CONFIG.handledAttribute, 'true');
+
+            const uid = post.getAttribute('data-uid');
+            const contentEl = post.querySelector('[component="post/content"]');
+
+            let hasSignature = false;
+
+            if (uid && detectedUids.has(uid)) {
+                hasSignature = true;
+            } else if (contentEl) {
+                const cleanText = getCleanPostText(contentEl);
+                if (cleanText.includes(CONFIG.fingerprint)) {
+                    hasSignature = true;
+                    if (uid) detectedUids.add(uid);
+                }
+            }
+
+            if (hasSignature) {
+                injectBadgeIntoPost(post);
+            }
+        });
+
+        const chatMessages = document.querySelectorAll('[component="chat/message"]:not([' + CONFIG.handledAttribute + '])');
+        chatMessages.forEach(msg => {
+            msg.setAttribute(CONFIG.handledAttribute, 'true');
+
+            const uid = msg.getAttribute('data-uid');
+            const bodyEl = msg.querySelector('.message-body, [component="chat/message/body"]');
+
+            let hasSignature = false;
+
+            if (uid && detectedUids.has(uid)) {
+                hasSignature = true;
+            } else if (bodyEl) {
+                const cleanText = getCleanPostText(bodyEl);
+                if (cleanText.includes(CONFIG.fingerprint)) {
+                    hasSignature = true;
+                    if (uid) detectedUids.add(uid);
+                }
+            }
+
+            if (hasSignature) {
+                injectBadgeIntoChat(msg);
+            }
+        });
+    }
+
+    function injectBadgeIntoPost(post) {
+        if (post.querySelector('.' + CONFIG.badgeClass)) return;
+
+        const target = post.querySelector('[component="post/header"], .post-header, .author-info');
+        if (!target) return;
+
+        const badge = document.createElement('span');
+        badge.className = CONFIG.badgeClass;
+        badge.title = 'משתמש ב-NodeBB Unified';
+        badge.innerHTML = '<i class="fa fa-bolt" aria-hidden="true"></i> Unified';
+
+        target.appendChild(badge);
+    }
+
+    function injectBadgeIntoChat(msg) {
+        if (msg.querySelector('.' + CONFIG.badgeClass)) return;
+
+        const target = msg.querySelector('.chat-user, .message-meta, [component="chat/message/user"]');
+        if (!target) return;
+
+        const badge = document.createElement('span');
+        badge.className = CONFIG.badgeClass;
+        badge.title = 'משתמש ב-NodeBB Unified';
+        badge.innerHTML = '<i class="fa fa-bolt" aria-hidden="true"></i> Unified';
+
+        target.appendChild(badge);
+    }
+
+    attachFingerprintListeners();
+    scanAndRenderBadges();
+
+    const observer = new MutationObserver(() => {
+        scanAndRenderBadges();
+    });
+
+    observer.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true
+    });
+})();
+/* SOURCE_END: זיהוי הדדי בין משתמשים.txt */
+        }
     }
     ];
 
@@ -29149,7 +29348,8 @@
         'copy-post-link-content',
         'last-read-sidebar-link',
         'voice-chat-messages',
-        'confirm-downvote'
+        'confirm-downvote',
+        'peer-detection'
     ]);
     const GLOBAL_MODULE_STORAGE_KEYS = new Set([
         'nodebb_dashboard_sites_v03',

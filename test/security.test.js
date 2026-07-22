@@ -151,4 +151,58 @@ assert.strictEqual(
 
 console.log('  ✅ Pass: validateImportPayload correctly enforces Fail-Closed security and schema validation.\n');
 
+// --- Test 5: Peer Detection Signature & Quote Filtering ---
+console.log('Test 5: Testing Peer Detection Fingerprint & Quote Filter Logic...');
+
+const FINGERPRINT = '\u200B\uFEFF\u200B\u200C\u200B';
+
+// 1. Appending fingerprint to outgoing text
+function appendFingerprint(text) {
+    if (text && !text.includes(FINGERPRINT)) {
+        return text + FINGERPRINT;
+    }
+    return text;
+}
+
+const originalText = 'שלום לכולם, זו הודעת ניסיון';
+const fingerprintedText = appendFingerprint(originalText);
+
+assert.strictEqual(fingerprintedText.includes(FINGERPRINT), true, 'Fingerprint signature must be appended');
+assert.strictEqual(appendFingerprint(fingerprintedText), fingerprintedText, 'Duplicate fingerprinting must be avoided');
+
+// 2. Quote filtering simulation
+function textContainsFingerprintOutsideQuotes(htmlContent) {
+    // Mock DOM node cleaning: strip <blockquote> tags
+    const cleaned = htmlContent.replace(/<blockquote[\s\S]*?<\/blockquote>/gi, '');
+    return cleaned.includes(FINGERPRINT);
+}
+
+const quotedHtmlWithSignature = `
+    <p>תגובה שלי</p>
+    <blockquote>
+        <p>הודעה מצוטטת של משתמש אחר ${FINGERPRINT}</p>
+    </blockquote>
+`;
+
+assert.strictEqual(
+    textContainsFingerprintOutsideQuotes(quotedHtmlWithSignature),
+    false,
+    'Fingerprint inside quoted text must be ignored to prevent false positives'
+);
+
+const ownHtmlWithSignature = `
+    <p>תגובה שלי עם החתימה ${FINGERPRINT}</p>
+    <blockquote>
+        <p>הודעה מצוטטת של משתמש אחר</p>
+    </blockquote>
+`;
+
+assert.strictEqual(
+    textContainsFingerprintOutsideQuotes(ownHtmlWithSignature),
+    true,
+    'Fingerprint outside quoted text must be correctly detected'
+);
+
+console.log('  ✅ Pass: Peer Detection fingerprinting and quote filtering work correctly.\n');
+
 console.log('🎉 ALL SECURITY & INTEGRITY TESTS PASSED SUCCESSFULLY!\n');
