@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.2.4
+// @version      1.2.5
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -32922,6 +32922,20 @@
         });
     }
 
+    // תג-V על אווטאר הכרטיס ב-/users למי שזוהה (אווטאר = [data-uid], span-אותיות או img-תמונה)
+    function badgeUsersCards() {
+        if (!enabled || !onUsersPage() || !usersContainer()) return;
+        userCards().forEach(({ card, uid }) => {
+            if (!(cache[uid] && cache[uid].isUser)) return;
+            const av = card.querySelector('[data-uid]');
+            if (!av) return;
+            const host = av.matches('img')
+                ? (av.closest('.avatar-wrapper, .rounded-circle') || av.parentElement)
+                : av; // avatar/icon: ה-span עצמו ה-host; nbbu-presence-host מכריח overflow:visible
+            attachBadgeToAvatar(av, host);
+        });
+    }
+
     /* ---------- טוגלים גרפיים בפאנל ההגדרות המרכזי (Shadow DOM פתוח) ---------- */
     const CHECK_MINI = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none">'
         + '<path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -32982,6 +32996,7 @@
             badgeAvatars();
             badgeChatTitles();
             applyUsersFilter();
+            badgeUsersCards();
             ensurePanelSettings();
             const vc = verifiedCount();
             if (vc !== lastVerifiedCount) {
