@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.2.1
+// @version      1.2.2
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -32750,16 +32750,16 @@
             const uid = post.getAttribute('data-uid');
             if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
             try {
-                // NodeBB מרנדר את האווטאר פעמיים (כפילות רספונסיב: אחד d-none). חייבים לבחור
-                // את הגלוי (offsetParent!=null מסנן display:none), אחרת התג יוצמד לנסתר.
-                // עדיפות לאווטאר שבתוך קישור-משתמש (host לא-נחתך); בפוסטי-המשך אין קישור.
-                const avatars = [...post.querySelectorAll('img[component="avatar/picture"]')];
-                const img = avatars.find(el => el.offsetParent && el.closest('a[href*="/user/"]'))
-                    || avatars.find(el => el.offsetParent)
+                // אווטאר-המחבר הראשי הוא component="user/picture" (מקושר לפרופיל). avatar/picture
+                // הוא משני (ציטוט/מענה) - אסור לתייג אותו. מעדיפים ראשי גלוי; בפוסט-המשך (אין ראשי)
+                // לוקחים avatar/picture שבכותרת (לא בתוך ציטוט). offsetParent מסנן כפילות רספונסיב (d-none).
+                const img = [...post.querySelectorAll('img[component="user/picture"]')].find(el => el.offsetParent)
+                    || [...post.querySelectorAll('img[component="avatar/picture"]')]
+                        .find(el => el.offsetParent && !el.closest('[component="post/content"]'))
                     || post.querySelector('a[href*="/user/"] img');
                 if (!img) return;
                 const host = img.closest('a[href*="/user/"]')
-                    || img.closest('.rounded-circle, .avatar-wrapper, [component="user/picture"]')
+                    || img.closest('.rounded-circle, .avatar-wrapper')
                     || img.parentElement;
                 attachBadgeToAvatar(img, host);
             } catch { /* דילוג */ }
