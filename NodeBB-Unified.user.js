@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.2.2
+// @version      1.2.3
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -32745,6 +32745,8 @@
     }
 
     function badgeAvatars() {
+        // הדדיות: מי שביטל את הסימון של עצמו (opt-out) לא רואה אף מסומן. ברירת המחדל אוכפת הוגנות.
+        if (!enabled) return;
         // אווטאר מחבר בכל פוסט (ה-uid מהפוסט; האווטאר הוא ה-img בקישור-המשתמש בכותרת)
         document.querySelectorAll('[component="post"]').forEach(post => {
             const uid = post.getAttribute('data-uid');
@@ -32781,6 +32783,7 @@
 
     // בצ'אט: וי כהמשך לשורת הכותרת #chat-room-title-<roomId>, אם הצד-השני משתמש בסקריפט
     function badgeChatTitles() {
+        if (!enabled) return; // הדדיות: opt-out לא רואה אף מסומן
         document.querySelectorAll('[id^="chat-room-title-"]').forEach(title => {
             if (title.querySelector(':scope > .' + CHAT_MARK_CLASS)) return;
             const win = title.closest(
@@ -32891,10 +32894,13 @@
     // עוטפים את הרשת מיד (document-start) כדי לא לפספס שליחות מוקדמות
     wrapNetwork();
 
-    // toggle דרך תפריט הסקריפט (opt-in, ברירת מחדל דלוק)
+    // opt-out דרך תפריט הסקריפט (ברירת מחדל: פעיל). כשמכובה - הפוסטים/הודעות שלי
+    // לא מסומנים ולא נערכת ריצה-ראשונה; עדיין רואים את מי שכן משתמש (סריקה/תגים ממשיכים).
     try {
         GM_registerMenuCommand(
-            (enabled ? '✓ ' : '') + 'חיווי נוכחות NodeBB Unified (הפעלה/כיבוי)',
+            enabled
+                ? '✓ סימון הנוכחות שלי פעיל (לחץ כדי לא להיות מסומן)'
+                : '✗ הנוכחות שלי מוסתרת (לחץ כדי לסמן אותי שוב)',
             () => {
                 enabled = !enabled;
                 GM_setValue(ENABLED_KEY, enabled);
