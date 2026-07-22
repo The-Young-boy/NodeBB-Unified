@@ -32750,9 +32750,12 @@
             const uid = post.getAttribute('data-uid');
             if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
             try {
-                // אווטאר-המחבר קיים גם בפוסטי-המשך (עוקבים מאותו מחבר) עם component="avatar/picture",
-                // אבל שם הוא לא עטוף ב-<a href="/user/">. הראשון ב-DOM הוא של המחבר (לא ציטוט).
-                const img = post.querySelector('img[component="avatar/picture"]')
+                // NodeBB מרנדר את האווטאר פעמיים (כפילות רספונסיב: אחד d-none). חייבים לבחור
+                // את הגלוי (offsetParent!=null מסנן display:none), אחרת התג יוצמד לנסתר.
+                // עדיפות לאווטאר שבתוך קישור-משתמש (host לא-נחתך); בפוסטי-המשך אין קישור.
+                const avatars = [...post.querySelectorAll('img[component="avatar/picture"]')];
+                const img = avatars.find(el => el.offsetParent && el.closest('a[href*="/user/"]'))
+                    || avatars.find(el => el.offsetParent)
                     || post.querySelector('a[href*="/user/"] img');
                 if (!img) return;
                 const host = img.closest('a[href*="/user/"]')
