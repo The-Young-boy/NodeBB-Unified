@@ -7,13 +7,9 @@ const assert = require('assert');
 
 const CONFIG_scoring = {
     bayesConfidence: 20,
-    velocitySmoothing: 90,
     recencyHalfLifeDays: 365,
     recencySeverity: 1.0,
-    weights: {
-        quality: 0.30, velocity: 0.18, volume: 0.15, momentum: 0.12,
-        topicQuality: 0.10, influence: 0.08, activeSpan: 0.07,
-    },
+    weights: { quality: 0.55, volume: 0.30, activeSpan: 0.15 }, // קומפוזיט רזה
 };
 
 function percentileMap(values) {
@@ -32,8 +28,8 @@ function percentileMap(values) {
     return pct;
 }
 
-// now + prevSnapshot מוזרקים לצורך דטרמיניזם (בקוד עצמו: Date.now() ו-GM snapshot)
-function computeSmartScores(users, now, prevSnapshot = {}) {
+// now מוזרק לצורך דטרמיניזם (בקוד עצמו: Date.now())
+function computeSmartScores(users, now) {
     const cfg = CONFIG_scoring;
     const DAY = 86400000;
     const pool = users.filter(u => u?.userslug && !u.banned && !u.deleted && !u.muted);
@@ -46,26 +42,19 @@ function computeSmartScores(users, now, prevSnapshot = {}) {
     const raw = pool.map(u => {
         const R = Math.max(0, u.reputation);
         const P = Math.max(0, u.postcount);
-        const T = Math.max(0, u.topiccount);
-        const ageDays = u.joindate > 0 ? Math.max(0, (now - u.joindate) / DAY) : 3650;
         const idleDays = u.lastonline > 0 ? Math.max(0, (now - u.lastonline) / DAY) : 0;
         const spanDays = (u.lastonline > 0 && u.joindate > 0)
             ? Math.max(0, (u.lastonline - u.joindate) / DAY) : 0;
-        const prevR = Number(prevSnapshot[u.userslug]);
         return {
             u,
             quality: (R + cfg.bayesConfidence * m) / (P + cfg.bayesConfidence),
-            velocity: R / (ageDays + cfg.velocitySmoothing),
             volume: Math.log10(1 + R),
-            momentum: Number.isFinite(prevR) ? (R - prevR) : 0,
-            topicQuality: R / (T + 5) + T / (P + 1),
-            influence: Math.log(1 + Math.max(0, u.profileviews)) + Math.log(1 + Math.max(0, u.followerCount)),
             activeSpan: spanDays,
             recency: Math.pow(0.5, (idleDays / cfg.recencyHalfLifeDays) * cfg.recencySeverity),
         };
     });
 
-    const comps = ['quality', 'velocity', 'volume', 'momentum', 'topicQuality', 'influence', 'activeSpan'];
+    const comps = ['quality', 'volume', 'activeSpan'];
     const pcts = {};
     for (const c of comps) pcts[c] = percentileMap(raw.map(r => r[c]));
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.3.3
+// @version      1.3.4
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -25626,7 +25626,7 @@
         noframes: false,
         enabledByDefault: true,
         requiresReload: true,
-        storageKeys: ["mitmachim_reputation_rankings_v3","mitmachim_reputation_updated_at_v3","mitmachim_reputation_enabled_v3","mitmachim_reputation_snapshot_v3"],
+        storageKeys: ["mitmachim_reputation_rankings_v3","mitmachim_reputation_updated_at_v3","mitmachim_reputation_enabled_v3"],
         sourceSha256: "5e46177bef763f3d1a12931946d1f2dc8815614cd3f2e3ac6c8748cf8865da04",
         originalBodySha256: "05d2dce413380541e7ff69ca091a7b664c1a9f39601a32f8174c5fab5aa588a6",
         embeddedBodySha256: "05d2dce413380541e7ff69ca091a7b664c1a9f39601a32f8174c5fab5aa588a6",
@@ -25678,19 +25678,17 @@
         // ניקוד = רעננות^severity × Σ(משקל × אחוזון_רכיב). נרמול=אחוזון (עמיד לחריגים).
         // הנוסחה משוכפלת ב-test/ranking.test.js - לעדכן את שניהם יחד.
         scoring: {
+            // קומפוזיט רזה: רק נתונים שרשימת /api/users באמת מחזירה (reputation, postcount,
+            // joindate, lastonline). הוסרו velocity/momentum/topicQuality/influence - היו
+            // ענישת-ותק, רעש-דלתא, וכפילות/משקל-מת חסרי-נתונים ששיבשו את הדירוג.
             enabled: true,          // false = דירוג לפי reputation גולמי (התנהגות ישנה)
             bayesConfidence: 20,    // C: כמה פוסטים "וירטואליים" בממוצע-האתר ממתנים משתמש חדש
-            velocitySmoothing: 90,  // ימים שמתווספים לגיל למניעת קפיצות אצל חשבונות צעירים
             recencyHalfLifeDays: 365, // חצי-חיים לדעיכת רעננות: רדום שנה => מכפיל 0.5
             recencySeverity: 1.0,   // חזקת מכפיל הרעננות
-            weights: {
-                quality: 0.30,      // (R + C·m)/(P + C) - איכות בייסיאנית
-                velocity: 0.18,     // R/(גיל_ימים + smoothing)
-                volume: 0.15,       // log10(1 + R)
-                momentum: 0.12,     // Δ reputation מול snapshot קודם
-                topicQuality: 0.10, // R/(T+5) + T/(P+1)
-                influence: 0.08,    // log(1+צפיות) + log(1+עוקבים)
-                activeSpan: 0.07,   // lastonline - joindate
+            weights: {              // סכום = 1.0; לכוונון חופשי
+                quality: 0.55,      // (R + C·m)/(P + C) - מוניטין-לפוסט בייסיאני (ספאמר צולל)
+                volume: 0.30,       // log10(1 + R) - נפח תרומה כולל
+                activeSpan: 0.15,   // (lastonline - joindate) - אורך פעילות (ותיק פעיל עולה)
             },
         },
 
@@ -25701,7 +25699,6 @@
         rankings: 'mitmachim_reputation_rankings_v3',
         updatedAt: 'mitmachim_reputation_updated_at_v3',
         enabled: 'mitmachim_reputation_enabled_v3',
-        snapshot: 'mitmachim_reputation_snapshot_v3', // reputation קודם per userslug, למומנטום
     };
 
     const CLASS_NAMES = {
@@ -27140,37 +27137,26 @@
         }
         const m = sumP > 0 ? sumR / sumP : 0;
 
-        const prevSnapshot = GM_getValue(STORAGE.snapshot, {}) || {};
-
         const raw = pool.map(u => {
             const R = Math.max(0, u.reputation);
             const P = Math.max(0, u.postcount);
-            const T = Math.max(0, u.topiccount);
 
-            // חסר joindate => ותק לא ידוע, ברירת-מחדל בינונית. ponytail: קירוב, שפרו אם ה-API יחזיר תמיד joindate
-            const ageDays = u.joindate > 0 ? Math.max(0, (now - u.joindate) / DAY) : 3650;
             // חסר lastonline => לא מענישים (לא-ידוע != רדום). ponytail
             const idleDays = u.lastonline > 0 ? Math.max(0, (now - u.lastonline) / DAY) : 0;
             const spanDays = (u.lastonline > 0 && u.joindate > 0)
                 ? Math.max(0, (u.lastonline - u.joindate) / DAY)
                 : 0;
 
-            const prevR = Number(prevSnapshot[u.userslug]);
-
             return {
                 u,
                 quality: (R + cfg.bayesConfidence * m) / (P + cfg.bayesConfidence),
-                velocity: R / (ageDays + cfg.velocitySmoothing),
                 volume: Math.log10(1 + R),
-                momentum: Number.isFinite(prevR) ? (R - prevR) : 0, // ריצה ראשונה => 0 => אחוזון neutral
-                topicQuality: R / (T + 5) + T / (P + 1),
-                influence: Math.log(1 + Math.max(0, u.profileviews)) + Math.log(1 + Math.max(0, u.followerCount)),
                 activeSpan: spanDays,
                 recency: Math.pow(0.5, (idleDays / cfg.recencyHalfLifeDays) * cfg.recencySeverity),
             };
         });
 
-        const comps = ['quality', 'velocity', 'volume', 'momentum', 'topicQuality', 'influence', 'activeSpan'];
+        const comps = ['quality', 'volume', 'activeSpan'];
         const pcts = {};
         for (const c of comps) {
             pcts[c] = percentileMap(raw.map(r => r[c]));
@@ -27185,14 +27171,6 @@
         });
 
         scored.sort((a, b) => b.smartScore - a.smartScore);
-
-        // שמירת reputation הנוכחי ל-snapshot (למומנטום בריצה הבאה)
-        const nextSnapshot = {};
-        for (const u of pool) {
-            nextSnapshot[u.userslug] = u.reputation;
-        }
-        GM_setValue(STORAGE.snapshot, nextSnapshot);
-
         return scored;
     }
 
