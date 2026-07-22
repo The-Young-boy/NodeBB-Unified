@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.3.4
+// @version      1.3.5
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -25626,7 +25626,7 @@
         noframes: false,
         enabledByDefault: true,
         requiresReload: true,
-        storageKeys: ["mitmachim_reputation_rankings_v3","mitmachim_reputation_updated_at_v3","mitmachim_reputation_enabled_v3"],
+        storageKeys: ["mitmachim_reputation_rankings_v3","mitmachim_reputation_updated_at_v3","mitmachim_reputation_enabled_v3","mitmachim_reputation_scoring_mode_v1"],
         sourceSha256: "5e46177bef763f3d1a12931946d1f2dc8815614cd3f2e3ac6c8748cf8865da04",
         originalBodySha256: "05d2dce413380541e7ff69ca091a7b664c1a9f39601a32f8174c5fab5aa588a6",
         embeddedBodySha256: "05d2dce413380541e7ff69ca091a7b664c1a9f39601a32f8174c5fab5aa588a6",
@@ -25699,6 +25699,7 @@
         rankings: 'mitmachim_reputation_rankings_v3',
         updatedAt: 'mitmachim_reputation_updated_at_v3',
         enabled: 'mitmachim_reputation_enabled_v3',
+        scoringMode: 'mitmachim_reputation_scoring_mode_v1', // true=משוכללת (קומפוזיט), false=רגילה (מוניטין גולמי)
     };
 
     const CLASS_NAMES = {
@@ -25713,6 +25714,8 @@
 
     let rankings = {};
     let enabled = GM_getValue(STORAGE.enabled, true);
+    // בורר שיטת-הניקוד נשמר בין הפעלות (ברירת-מחדל = הערך שב-CONFIG)
+    CONFIG.scoring.enabled = GM_getValue(STORAGE.scoringMode, CONFIG.scoring.enabled);
 
     let updatePromise = null;
     let observer = null;
@@ -28788,6 +28791,32 @@
                         'info'
                     );
                 }
+            }
+        );
+
+        GM_registerMenuCommand(
+            CONFIG.scoring.enabled
+                ? 'שיטת דירוג: משוכללת ← לחץ למעבר לרגילה (מוניטין)'
+                : 'שיטת דירוג: רגילה (מוניטין) ← לחץ למעבר למשוכללת',
+            async () => {
+                CONFIG.scoring.enabled = !CONFIG.scoring.enabled;
+
+                GM_setValue(
+                    STORAGE.scoringMode,
+                    CONFIG.scoring.enabled
+                );
+
+                await updateRankings({
+                    force: true,
+                    notify: true,
+                });
+
+                showNotification(
+                    CONFIG.scoring.enabled
+                        ? 'שיטת דירוג: משוכללת (קומפוזיט)'
+                        : 'שיטת דירוג: רגילה (מוניטין גולמי)',
+                    'info'
+                );
             }
         );
 
@@ -32758,9 +32787,12 @@
     // האווטארים באתר הם <img> פשוט בתוך .rounded-circle / .avatar-wrapper (לא img.avatar
     // ולא [component="user/picture"]). לכן ניגשים context-first: מאתרים את אווטאר-המחבר
     // בתוך הפוסט, ואת אווטאר-הכותרת בדף-המשתמש, ומצמידים לעטיפה העגולה.
-    function attachBadgeToAvatar(img) {
+    function attachBadgeToAvatar(img, preferredHost) {
         if (!img) return;
-        const host = img.closest('.rounded-circle, .avatar-wrapper, [component="user/picture"]') || img.parentElement;
+        // preferredHost (עוטף ה-<a> של הפוסט) לא חותך; ה-.avatar עצמו כן (overflow:hidden+border-radius)
+        const host = preferredHost
+            || img.closest('.rounded-circle, .avatar-wrapper, [component="user/picture"]')
+            || img.parentElement;
         if (!host || host.querySelector(':scope > .' + BADGE_CLASS)) return;
         host.classList.add(BADGE_HOST_CLASS);
         const badge = document.createElement('span');
@@ -32776,7 +32808,9 @@
             const uid = post.getAttribute('data-uid');
             if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
             try {
-                attachBadgeToAvatar(post.querySelector('a[href*="/user/"] img'));
+                const img = post.querySelector('a[href*="/user/"] img');
+                // מצמידים לעוטף ה-<a> (לא נחתך), לא ל-.avatar עצמו
+                attachBadgeToAvatar(img, img && img.closest('a[href*="/user/"]'));
             } catch { /* דילוג */ }
         });
 
