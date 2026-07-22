@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.1.0
+// @version      1.2.0
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -4457,7 +4457,7 @@
             }
 
             #${SIDEBAR_ITEM_ID} .mtpun-sidebar-icon {
-                color: var(--bs-primary, #0d6efd);
+                color: inherit;  /* ניטרלי כמו שאר כפתורי-הניווט, לא primary צבוע */
                 font-size: 16px;
                 line-height: 1;
             }
@@ -4719,16 +4719,15 @@
             'המשתמשים המסומנים שלי'
         );
 
+        // ה-badge של המונה מופיע רק כשיש מסומנים בפועל (count>0).
+        // כשאין - רק האייקון, אחרת "0" נראה כמו התראה שלא נקראה.
         button.innerHTML = `
             <span class="mtpun-sidebar-icon-wrapper">
                 <i
                     class="fa fa-fw fa-note-sticky mtpun-sidebar-icon"
                     aria-hidden="true"
                 ></i>
-
-                <span class="mtpun-sidebar-count">
-                    ${count}
-                </span>
+                ${count > 0 ? `<span class="mtpun-sidebar-count">${count}</span>` : ''}
             </span>
         `;
     }
@@ -25627,7 +25626,7 @@
         noframes: false,
         enabledByDefault: true,
         requiresReload: true,
-        storageKeys: ["mitmachim_reputation_rankings_v3","mitmachim_reputation_updated_at_v3","mitmachim_reputation_enabled_v3"],
+        storageKeys: ["mitmachim_reputation_rankings_v3","mitmachim_reputation_updated_at_v3","mitmachim_reputation_enabled_v3","mitmachim_reputation_scoring_mode_v1"],
         sourceSha256: "5e46177bef763f3d1a12931946d1f2dc8815614cd3f2e3ac6c8748cf8865da04",
         originalBodySha256: "05d2dce413380541e7ff69ca091a7b664c1a9f39601a32f8174c5fab5aa588a6",
         embeddedBodySha256: "05d2dce413380541e7ff69ca091a7b664c1a9f39601a32f8174c5fab5aa588a6",
@@ -25675,6 +25674,16 @@
         // הצגת חלונית מידע במעבר עכבר
         enableTooltip: true,
 
+        // דירוג חכם: משקלים וקבועים (ניתנים לשינוי ע"י המשתמש).
+        // ניקוד = רעננות^severity × Σ(משקל × אחוזון_רכיב). נרמול=אחוזון (עמיד לחריגים).
+        // הנוסחה משוכפלת ב-test/ranking.test.js - לעדכן את שניהם יחד.
+        scoring: {
+            // הדירוג המשוכלל = יחס מוניטין/פוסטים (כמו שקובע באתר), בריכוך בייסיאני
+            // כדי שמשתמש עם מעט פוסטים לא יקפוץ לראש על סמך יחס גבוה מקרי.
+            enabled: false,         // ברירת מחדל = דירוג רגיל (מוניטין גולמי); true = משוכללת (יחס R/P)
+            bayesConfidence: 20,    // C: כמה פוסטים "וירטואליים" בממוצע-האתר ממתנים משתמש חדש (0 = R/P טהור)
+        },
+
         debug: false,
     };
 
@@ -25682,6 +25691,7 @@
         rankings: 'mitmachim_reputation_rankings_v3',
         updatedAt: 'mitmachim_reputation_updated_at_v3',
         enabled: 'mitmachim_reputation_enabled_v3',
+        scoringMode: 'mitmachim_reputation_scoring_mode_v1', // true=משוכללת (קומפוזיט), false=רגילה (מוניטין גולמי)
     };
 
     const CLASS_NAMES = {
@@ -25696,6 +25706,8 @@
 
     let rankings = {};
     let enabled = GM_getValue(STORAGE.enabled, true);
+    // בורר שיטת-הניקוד נשמר בין הפעלות (ברירת-מחדל = הערך שב-CONFIG)
+    CONFIG.scoring.enabled = GM_getValue(STORAGE.scoringMode, CONFIG.scoring.enabled);
 
     let updatePromise = null;
     let observer = null;
@@ -26784,6 +26796,11 @@
             0
         );
 
+        const num = value => {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
         return {
             userslug,
             username,
@@ -26796,6 +26813,18 @@
             uid:
                 user.uid ??
                 null,
+
+            // שדות לדירוג החכם (computeSmartScores). חלקם לא תמיד קיימים
+            // בתשובת רשימת המשתמשים (רק בפרופיל המלא) - אז נופלים ל-0 ומטופלים כ-neutral.
+            postcount: num(user.postcount ?? user.postCount),
+            topiccount: num(user.topiccount ?? user.topicCount),
+            joindate: num(user.joindate ?? (user.joindateISO && Date.parse(user.joindateISO))),
+            lastonline: num(user.lastonline ?? (user.lastonlineISO && Date.parse(user.lastonlineISO))),
+            profileviews: num(user.profileviews),
+            followerCount: num(user.followerCount ?? user.followercount),
+            banned: !!user.banned,
+            deleted: !!user.deleted,
+            muted: !!(user.muted || (user.mutedUntil && Number(user.mutedUntil) > Date.now())),
         };
     }
 
@@ -27052,11 +27081,55 @@
         return results;
     }
 
+    /* =========================================================
+       דירוג חכם: ניקוד מורכב במקום reputation גולמי
+       הנוסחה משוכפלת ב-test/ranking.test.js - לעדכן את שניהם יחד.
+       ========================================================= */
+
+    // לכל ערך: אחוזון באוכלוסייה (midrank לתיקו). O(n log n).
+    // כל הערכים שווים => כולם 0.5 (neutral).
+    function computeSmartScores(users) {
+        const cfg = CONFIG.scoring;
+
+        const pool = users.filter(
+            u => u?.userslug && !u.banned && !u.deleted && !u.muted
+        );
+        if (!pool.length) {
+            return [];
+        }
+
+        // ממוצע-אתר של מוניטין-לפוסט (m), לריכוך בייסיאני של מי שיש לו מעט פוסטים
+        // (מונע חריג כמו 1 פוסט / 5 לייקים שיקפוץ לראש). C=bayesConfidence "פוסטים וירטואליים".
+        let sumR = 0;
+        let sumP = 0;
+        for (const u of pool) {
+            sumR += Math.max(0, u.reputation);
+            sumP += Math.max(0, u.postcount);
+        }
+        const m = sumP > 0 ? sumR / sumP : 0;
+
+        // הדירוג = יחס מוניטין/פוסטים בלבד (כמו באתר), בייסיאני. C=0 => R/P טהור.
+        const scored = pool.map(u => {
+            const R = Math.max(0, u.reputation);
+            const P = Math.max(0, u.postcount);
+            return { ...u, smartScore: (R + cfg.bayesConfidence * m) / (P + cfg.bayesConfidence) };
+        });
+
+        scored.sort((a, b) => b.smartScore - a.smartScore);
+        return scored;
+    }
+
     function createRankingsMap(users) {
         const result = {};
+
+        // דירוג חכם ממיין מחדש; אחרת נשמר סדר ה-API (reputation גולמי)
+        const ordered = CONFIG.scoring.enabled
+            ? computeSmartScores(users)
+            : users;
+
         let rank = 0;
 
-        users.forEach(user => {
+        ordered.forEach(user => {
             if (
                 !user?.userslug ||
                 result[user.userslug]
@@ -27071,6 +27144,9 @@
                 username: user.username,
                 reputation: user.reputation,
                 uid: user.uid,
+                score: Number.isFinite(user.smartScore)
+                    ? Math.round(user.smartScore * 1000) / 1000
+                    : undefined,
             };
         });
 
@@ -28657,6 +28733,32 @@
                         'info'
                     );
                 }
+            }
+        );
+
+        GM_registerMenuCommand(
+            CONFIG.scoring.enabled
+                ? 'שיטת דירוג: משוכללת ← לחץ למעבר לרגילה (מוניטין)'
+                : 'שיטת דירוג: רגילה (מוניטין) ← לחץ למעבר למשוכללת',
+            async () => {
+                CONFIG.scoring.enabled = !CONFIG.scoring.enabled;
+
+                GM_setValue(
+                    STORAGE.scoringMode,
+                    CONFIG.scoring.enabled
+                );
+
+                await updateRankings({
+                    force: true,
+                    notify: true,
+                });
+
+                showNotification(
+                    CONFIG.scoring.enabled
+                        ? 'שיטת דירוג: משוכללת (קומפוזיט)'
+                        : 'שיטת דירוג: רגילה (מוניטין גולמי)',
+                    'info'
+                );
             }
         );
 
@@ -32609,5 +32711,531 @@
                 startManager();
             }
         });
+    }
+})();
+
+/* =========================================================
+   חיווי נוכחות "משתמש ב-NodeBB Unified" (presence)
+   מודול עצמאי: מזריק סימן נסתר (בלוק TAG של יוניקוד) לכל פוסט/הודעה
+   יוצאים, מזהה אותו בפוסטים/צ'אט נכנסים, ומוסיף תג-מאומת סגול לאווטאר.
+   ponytail: מודול top-level נפרד במקום שילוב במנהל-המודולים - נגיעה מינימלית בקוד הקיים.
+   ========================================================= */
+(function nodebbUnifiedPresence() {
+    'use strict';
+
+    // גישה לחלון-העמוד האמיתי (לא דרך unsafeWindow.prop - נאסר ע"י בדיקת האבטחה)
+    const W = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+
+    // רץ רק על mitmachim (ה-@match רחב; לא נוגעים ב-fetch של אתרים אחרים)
+    if (!/(^|\.)mitmachim\.top$/i.test(location.hostname)) {
+        return;
+    }
+
+    const MAGIC = 'nbbu';
+    const VERSION = 1;
+    const TAG_BASE = 0xE0000; // כל תו ASCII X מקודד כ-U+E0000+X (בלתי-נראה, שורד את הסניטייזר)
+
+    const ENABLED_KEY = 'nbbu_presence_enabled_v1';
+    const CACHE_KEY = 'nbbu_presence_cache_v2'; // { uid: { isUser, key } }  key=pid/mid אחרון שנראה (v2: איפוס מטמון ישן)
+    const USERS_FILTER_KEY = 'nbbu_presence_users_filter'; // בדף /users: הצג רק משתמשי הסקריפט
+    const PANEL_HOST_ID = 'nodebb-unified-manager-host-v1'; // חייב להתאים ל-host של המנהל המרכזי
+
+    let enabled = GM_getValue(ENABLED_KEY, true);
+    let usersFilterOn = GM_getValue(USERS_FILTER_KEY, false);
+
+    // לוגים לאבחון (ניתן לכבות: GM_setValue('nbbu_presence_debug', false))
+    const DEBUG = GM_getValue('nbbu_presence_debug', true);
+    const log = (...a) => { if (DEBUG) console.log('%c[NBBU presence]', 'color:#8b5cf6;font-weight:700', ...a); };
+
+    /* ---------- קידוד/פענוח הסימן ---------- */
+    // הנוסחה: magic+version כמחרוזת ASCII, כל תו -> תו-TAG. לעתיד אפשר להוסיף ".payload".
+    function buildMarker() {
+        const s = MAGIC + VERSION; // "nbbu1"
+        let out = '';
+        for (const ch of s) {
+            out += String.fromCodePoint(TAG_BASE + ch.charCodeAt(0));
+        }
+        return out;
+    }
+    const MARKER = buildMarker();
+
+    function decodeMarker(text) {
+        if (!text) return null;
+        let ascii = '';
+        for (const ch of text) {
+            const cp = ch.codePointAt(0);
+            if (cp >= TAG_BASE && cp <= TAG_BASE + 0x7f) {
+                ascii += String.fromCharCode(cp - TAG_BASE);
+            }
+        }
+        if (!ascii.startsWith(MAGIC)) return null;
+        const ver = parseInt(ascii.slice(MAGIC.length), 10);
+        return { version: Number.isFinite(ver) ? ver : 0 };
+    }
+    const hasMarker = text => !!decodeMarker(text);
+
+    /* ---------- הזרקה לתוכן יוצא (fetch + XHR) ---------- */
+    // עורך רק את גוף ה-write-API של NodeBB: content (פוסט/נושא/עריכה) או message (צ'אט).
+    const WRITE_RE = /\/api\/v3\/(topics(\/\d+)?|posts\/\d+|chats\/\d+)\/?(\?.*)?$/;
+
+    function injectIntoBody(bodyStr) {
+        if (typeof bodyStr !== 'string' || !bodyStr) return bodyStr;
+        let data;
+        try {
+            data = JSON.parse(bodyStr);
+        } catch {
+            return bodyStr; // גוף לא-JSON (למשל FormData) - לא נוגעים. ponytail
+        }
+        if (!data || typeof data !== 'object') return bodyStr;
+
+        const field = typeof data.content === 'string'
+            ? 'content'
+            : (typeof data.message === 'string' ? 'message' : null);
+        if (!field) return bodyStr;
+        if (hasMarker(data[field])) return bodyStr; // idempotent
+
+        data[field] = data[field] + MARKER;
+        log('הוזרק סימן ל-' + field + ' (fetch/XHR)');
+        try {
+            return JSON.stringify(data);
+        } catch {
+            return bodyStr;
+        }
+    }
+
+    // NodeBB שולח פוסטים/עריכות/צ'אט דרך socket.io, לא REST - חייבים לעטוף גם את socket.emit
+    // ponytail: לא עוטפים XHR/socket.emit - זה עבר בנתיב של כל בקשות ה-polling של socket.io
+    // ושבר את החיבור (400/xhr poll error). מזריקים רק דרך fetch (מסלול נפרד מ-socket.io).
+    function wrapNetwork() {
+        const origFetch = W.fetch;
+        if (typeof origFetch === 'function' && !origFetch.__nbbuWrapped) {
+            const wrapped = function (input, init) {
+                try {
+                    if (enabled && init && typeof init.body === 'string') {
+                        const url = typeof input === 'string' ? input : (input && input.url) || '';
+                        if (WRITE_RE.test(url)) {
+                            init = Object.assign({}, init, { body: injectIntoBody(init.body) });
+                        }
+                    }
+                } catch { /* fail-open: לא חוסמים שליחה */ }
+                return origFetch.call(this, input, init);
+            };
+            wrapped.__nbbuWrapped = true;
+            W.fetch = wrapped;
+        }
+    }
+
+    /* ---------- מטמון נוכחות (uid -> {isUser, key}) ---------- */
+    let cache = {};
+    try {
+        cache = GM_getValue(CACHE_KEY, {}) || {};
+    } catch { cache = {}; }
+
+    let flushTimer = null;
+    function scheduleFlush() {
+        if (flushTimer) return;
+        flushTimer = setTimeout(() => {
+            flushTimer = null;
+            try { GM_setValue(CACHE_KEY, cache); } catch { /* מלא? מתעלמים */ }
+        }, 3000);
+    }
+
+    // אמת: הסימן הוא בלוק-TAG => הוכחה חיובית עם אפס false-positive. ברירת מחדל "sticky":
+    // ברגע שנראה פוסט/הודעה מסומנים מ-uid, נועלים אותו כמשתמש. הכלל המתכלה-מעצמו
+    // (הפוסט-האחרון-קובע) פחות אמין בהטמעה - ההזרקה לא רצה על פוסטים ישנים/נתיב-socket,
+    // אז "החדש-ביותר-בלי-סימן" נותן בעיקר false-negative. למי שרוצה אותו:
+    // GM_setValue('nbbu_presence_strict_latest', true).
+    const STRICT_LATEST = GM_getValue('nbbu_presence_strict_latest', false);
+    function recordPresence(uid, key, isUser) {
+        uid = String(uid || '');
+        key = Number(key);
+        if (!uid || !Number.isFinite(key)) return;
+        const prev = cache[uid];
+        if (!STRICT_LATEST) {
+            if (prev && prev.isUser) return;      // כבר הוכח כמשתמש - נעול
+            if (!isUser && prev) return;          // אין שינוי (נשאר לא-משתמש)
+            cache[uid] = { isUser: !!isUser, key };
+            scheduleFlush();
+            return;
+        }
+        // strict: הפוסט/הודעה הכי חדשים קובעים (key מונוטוני; אין TTL - מתכלה מעצמו)
+        if (prev && Number(prev.key) > key) return; // ראינו כבר משהו חדש יותר
+        if (prev && Number(prev.key) === key && prev.isUser === isUser) return;
+        cache[uid] = { isUser: !!isUser, key };
+        scheduleFlush();
+    }
+
+    /* ---------- סריקת פוסטים/צ'אט לזיהוי הסימן ---------- */
+    function scanContainer(root) {
+        if (!(root instanceof Element) && root !== document) return;
+        const scope = root === document ? document : root;
+
+        // פוסטים
+        scope.querySelectorAll('[component="post"][data-pid]').forEach(post => {
+            const uid = post.getAttribute('data-uid');
+            if (!uid || uid === '0') return;
+            const body = post.querySelector('[component="post/content"]') || post;
+            recordPresence(uid, post.getAttribute('data-pid'), hasMarker(body.textContent));
+        });
+
+        // הודעות צ'אט
+        scope.querySelectorAll('[component="chat/message"][data-mid]').forEach(msg => {
+            const host = msg.closest('[data-uid]') || msg.querySelector('[data-uid]');
+            const uid = (host && host.getAttribute('data-uid')) || msg.getAttribute('data-uid');
+            if (!uid || uid === '0') return;
+            recordPresence(uid, msg.getAttribute('data-mid'), hasMarker(msg.textContent));
+        });
+    }
+
+    /* ---------- תג-מאומת סגול ---------- */
+    const BADGE_CLASS = 'nbbu-presence-badge';
+    const BADGE_HOST_CLASS = 'nbbu-presence-host';
+    const CHAT_MARK_CLASS = 'nbbu-presence-chatmark';
+    const TOOLTIP = 'משתמש ב-NodeBB Unified';
+
+    function addStyles() {
+        if (document.getElementById('nbbu-presence-style')) return;
+        const style = document.createElement('style');
+        style.id = 'nbbu-presence-style';
+        style.textContent = `
+            .${BADGE_HOST_CLASS} { position: relative !important; overflow: visible !important; }
+            .${BADGE_CLASS} {
+                position: absolute !important;
+                right: -2px !important; bottom: -2px !important;  /* פינה ימנית-תחתונה (פיזי, גם ב-RTL) */
+                width: 14px !important; height: 14px !important;
+                border-radius: 50% !important;
+                background: #8b5cf6 !important;
+                border: 2px solid #fff !important;
+                box-sizing: border-box !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                z-index: 10000 !important; pointer-events: auto !important;
+                box-shadow: 0 1px 3px rgba(0,0,0,.35) !important;
+            }
+            .${BADGE_CLASS} svg { width: 9px !important; height: 9px !important; display: block !important; }
+            /* בצ'אט: וי אינליין כהמשך טבעי לשורת הכותרת */
+            .${CHAT_MARK_CLASS} {
+                display: inline-flex !important; align-items: center !important; justify-content: center !important;
+                width: 1em !important; height: 1em !important; margin-inline-start: .25em !important;
+                border-radius: 50% !important; background: #8b5cf6 !important;
+                vertical-align: -0.12em !important;
+            }
+            .${CHAT_MARK_CLASS} svg { width: .66em !important; height: .66em !important; display: block !important; }
+        `;
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+        + '<path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    const myUid = () => String((W.app && W.app.user && W.app.user.uid) || '');
+
+    // האווטארים באתר הם <img> פשוט בתוך .rounded-circle / .avatar-wrapper (לא img.avatar
+    // ולא [component="user/picture"]). לכן ניגשים context-first: מאתרים את אווטאר-המחבר
+    // בתוך הפוסט, ואת אווטאר-הכותרת בדף-המשתמש, ומצמידים לעטיפה העגולה.
+    function attachBadgeToAvatar(img, preferredHost) {
+        if (!img) return;
+        // preferredHost (עוטף ה-<a> של הפוסט) לא חותך; ה-.avatar עצמו כן (overflow:hidden+border-radius)
+        const host = preferredHost
+            || img.closest('.rounded-circle, .avatar-wrapper, [component="user/picture"]')
+            || img.parentElement;
+        if (!host || host.querySelector(':scope > .' + BADGE_CLASS)) return;
+        host.classList.add(BADGE_HOST_CLASS);
+        const badge = document.createElement('span');
+        badge.className = BADGE_CLASS;
+        badge.title = TOOLTIP;
+        badge.innerHTML = CHECK_SVG;
+        host.appendChild(badge);
+    }
+
+    function badgeAvatars() {
+        // הדדיות: מי שביטל את הסימון של עצמו (opt-out) לא רואה אף מסומן. ברירת המחדל אוכפת הוגנות.
+        if (!enabled) return;
+        // אווטאר מחבר בכל פוסט (ה-uid מהפוסט; האווטאר הוא ה-img בקישור-המשתמש בכותרת)
+        document.querySelectorAll('[component="post"]').forEach(post => {
+            const uid = post.getAttribute('data-uid');
+            if (!uid || uid === '0' || !cache[uid] || !cache[uid].isUser) return;
+            try {
+                // אווטאר-המחבר הראשי הוא component="user/picture" (מקושר לפרופיל). avatar/picture
+                // הוא משני (ציטוט/מענה) - אסור לתייג אותו. מעדיפים ראשי גלוי; בפוסט-המשך (אין ראשי)
+                // לוקחים avatar/picture שבכותרת (לא בתוך ציטוט). offsetParent מסנן כפילות רספונסיב (d-none).
+                const img = [...post.querySelectorAll('img[component="user/picture"]')].find(el => el.offsetParent)
+                    || [...post.querySelectorAll('img[component="avatar/picture"]')]
+                        .find(el => el.offsetParent && !el.closest('[component="post/content"]'))
+                    || post.querySelector('a[href*="/user/"] img');
+                if (!img) return;
+                const host = img.closest('a[href*="/user/"]')
+                    || img.closest('.rounded-circle, .avatar-wrapper')
+                    || img.parentElement;
+                attachBadgeToAvatar(img, host);
+            } catch { /* דילוג */ }
+        });
+
+        // אווטאר בכותרת דף-המשתמש (ה-uid מ-ajaxify)
+        if (/^\/user\//i.test(location.pathname)) {
+            const uid = String((W.ajaxify && W.ajaxify.data && W.ajaxify.data.uid) || '');
+            if (uid && cache[uid] && cache[uid].isUser) {
+                try {
+                    attachBadgeToAvatar(
+                        document.querySelector('.border-bottom .avatar-wrapper > img')
+                        || document.querySelector('.avatar-wrapper > img')
+                    );
+                } catch { /* דילוג */ }
+            }
+        }
+    }
+
+    // בצ'אט: וי כהמשך לשורת הכותרת #chat-room-title-<roomId>, אם הצד-השני משתמש בסקריפט
+    function badgeChatTitles() {
+        if (!enabled) return; // הדדיות: opt-out לא רואה אף מסומן
+        document.querySelectorAll('[id^="chat-room-title-"]').forEach(title => {
+            if (title.querySelector(':scope > .' + CHAT_MARK_CLASS)) return;
+            const win = title.closest(
+                '[component="chat/message-window"], .chat-modal, .expanded-chat, .chats-full'
+            ) || document;
+            const me = myUid();
+            // הצד-השני: uid בחלון הצ'אט ששונה ממני (1:1). ponytail: בקבוצה ייבחר הראשון
+            let otherUid = '';
+            win.querySelectorAll('[data-uid]').forEach(el => {
+                const u = el.getAttribute('data-uid');
+                if (u && u !== '0' && u !== me && !otherUid) otherUid = u;
+            });
+            if (!otherUid || !cache[otherUid] || !cache[otherUid].isUser) return;
+            const mark = document.createElement('span');
+            mark.className = CHAT_MARK_CLASS;
+            mark.title = TOOLTIP;
+            mark.innerHTML = CHECK_SVG;
+            title.appendChild(mark);
+        });
+    }
+
+    /* ---------- ריצה ראשונה: עריכת הפוסט האחרון להוספת הסימן (חיווי מיידי) ---------- */
+    const FIRSTRUN_KEY = 'nbbu_presence_firstrun_v2'; // v2: איפוס כדי לנסות שוב את עריכת-הפוסט
+
+    async function getCsrf() {
+        try {
+            const cfg = await W.fetch('/api/config', {
+                headers: { Accept: 'application/json' }, credentials: 'same-origin',
+            }).then(r => r.json());
+            return cfg && cfg.csrf_token;
+        } catch { return null; }
+    }
+
+    async function firstRunEditLastPost() {
+        if (!enabled) { log('ריצה-ראשונה: מכובה'); return; }
+        if (GM_getValue(FIRSTRUN_KEY, false)) { log('ריצה-ראשונה: כבר בוצעה בעבר'); return; }
+        const user = W.app && W.app.user;
+        if (!user || !user.uid || !user.userslug) { log('ריצה-ראשונה: אין משתמש מחובר'); return; }
+        try {
+            const posts = await W.fetch(
+                '/api/user/' + encodeURIComponent(user.userslug) + '/posts',
+                { headers: { Accept: 'application/json' }, credentials: 'same-origin' }
+            ).then(r => r.json());
+            const pid = posts && posts.posts && posts.posts[0] && posts.posts[0].pid;
+            if (!pid) { log('ריצה-ראשונה: לא נמצאו פוסטים למשתמש', posts); GM_setValue(FIRSTRUN_KEY, true); return; }
+            log('ריצה-ראשונה: פוסט אחרון pid=' + pid);
+
+            // תוכן גולמי (markdown) - חובה כדי לא להשחית את הפוסט
+            const rawResp = await W.fetch('/api/v3/posts/' + pid + '/raw', {
+                headers: { Accept: 'application/json' }, credentials: 'same-origin',
+            }).then(r => r.json());
+            const raw = rawResp && rawResp.response && rawResp.response.content;
+            if (typeof raw !== 'string') { log('ריצה-ראשונה: לא התקבל תוכן גולמי', rawResp); return; }
+            if (hasMarker(raw)) { log('ריצה-ראשונה: הפוסט כבר מסומן'); GM_setValue(FIRSTRUN_KEY, true); return; }
+
+            const csrf = await getCsrf();
+            if (!csrf) { log('ריצה-ראשונה: אין csrf token'); return; }
+            const put = await W.fetch('/api/v3/posts/' + pid, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf, Accept: 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ content: raw + MARKER }),
+            });
+            log('ריצה-ראשונה: PUT עריכת פוסט ' + pid + ' -> ' + put.status);
+            if (put.ok) GM_setValue(FIRSTRUN_KEY, true);
+        } catch (e) { log('ריצה-ראשונה: שגיאה', e); }
+    }
+
+    function whenAppReady(cb, tries = 40) {
+        if (W.app && W.app.user && W.app.user.uid) return cb();
+        if (tries <= 0) return;
+        setTimeout(() => whenAppReady(cb, tries - 1), 500);
+    }
+
+    /* ---------- דף /users: סינון "רק משתמשי הסקריפט" ---------- */
+    // הזיהוי הרגיל בונה מטמון רק ממי שראינו את הפוסטים שלו בשרשורים. בדף /users רובם לא במטמון,
+    // אז כשהסינון פעיל בודקים אקטיבית כל כרטיס פעם אחת (מושכים פוסטים אחרונים, מחפשים סימן).
+    const checkedSlugs = new Set(); // slug שכבר נבדק (מונע פטיש-API)
+    let checkingCount = 0;
+
+    function onUsersPage() {
+        return /^\/users\b/i.test(location.pathname);
+    }
+    function usersContainer() {
+        return document.querySelector('[component="users/container"]')
+            || document.querySelector('.users-container, #users-container');
+    }
+    function userCards() {
+        const c = usersContainer();
+        if (!c) return [];
+        const seen = new Set();
+        const cards = [];
+        // כל כרטיס = צאצא-ישיר של הקונטיינר; ה-uid על [data-uid] בתוכו (avatar/icon או avatar/picture)
+        [...c.children].forEach(card => {
+            const link = card.querySelector('a[href*="/user/"]');
+            const uidEl = card.querySelector('[data-uid]');
+            const uid = uidEl && uidEl.getAttribute('data-uid');
+            if (!link || !uid || uid === '0' || seen.has(uid)) return;
+            seen.add(uid);
+            const slug = (link.getAttribute('href').match(/\/user\/([^/?#]+)/) || [])[1];
+            cards.push({ card, uid, slug });
+        });
+        return cards;
+    }
+    async function checkHasScript(slug) {
+        try {
+            const r = await W.fetch('/api/user/' + encodeURIComponent(slug) + '/posts',
+                { headers: { Accept: 'application/json' }, credentials: 'same-origin' }).then(r => r.json());
+            const posts = (r && r.posts) || [];
+            return posts.some(p => hasMarker(p && (p.content || ''))); // סימן שורד גם ב-content המרונדר
+        } catch { return null; }
+    }
+    function applyUsersFilter() {
+        if (!onUsersPage() || !usersContainer()) return;
+        const active = usersFilterOn && enabled; // הדדיות: opt-out לא מסנן/רואה
+        const cards = userCards();
+        if (active) {
+            for (const { slug, uid } of cards) {
+                if (!slug || checkedSlugs.has(slug) || (cache[uid] && cache[uid].isUser)) continue;
+                if (checkingCount >= 3) break; // ponytail: תקרת קונקורנטיות פשוטה (3), מספיק לדף
+                checkedSlugs.add(slug);
+                checkingCount += 1;
+                checkHasScript(slug).then(is => {
+                    checkingCount -= 1;
+                    if (is) recordPresence(uid, Date.now(), true); // sticky: ננעל כמשתמש
+                    scheduleScan();
+                });
+            }
+        }
+        cards.forEach(({ card, uid }) => {
+            const isUser = !!(cache[uid] && cache[uid].isUser);
+            card.style.display = (active && !isUser) ? 'none' : '';
+        });
+    }
+
+    // תג-V על אווטאר הכרטיס ב-/users למי שזוהה (אווטאר = [data-uid], span-אותיות או img-תמונה)
+    function badgeUsersCards() {
+        if (!enabled || !onUsersPage() || !usersContainer()) return;
+        userCards().forEach(({ card, uid }) => {
+            if (!(cache[uid] && cache[uid].isUser)) return;
+            const av = card.querySelector('[data-uid]');
+            if (!av) return;
+            const host = av.matches('img')
+                ? (av.closest('.avatar-wrapper, .rounded-circle') || av.parentElement)
+                : av; // avatar/icon: ה-span עצמו ה-host; nbbu-presence-host מכריח overflow:visible
+            attachBadgeToAvatar(av, host);
+        });
+    }
+
+    /* ---------- טוגלים גרפיים בפאנל ההגדרות המרכזי (Shadow DOM פתוח) ---------- */
+    const CHECK_MINI = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none">'
+        + '<path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    function syncPanelToggles(root) {
+        const sec = root.getElementById('nbbu-presence-settings');
+        if (!sec) return;
+        sec.querySelector('[data-nbbu="enabled"]').checked = enabled;
+        sec.querySelector('[data-nbbu="usersFilter"]').checked = usersFilterOn;
+    }
+    function ensurePanelSettings() {
+        const host = document.getElementById(PANEL_HOST_ID);
+        const root = host && host.shadowRoot;
+        if (!root) return;
+        const panel = root.querySelector('.panel');
+        const moduleList = root.querySelector('[data-role="module-list"]');
+        if (!panel || !moduleList) return;
+        if (root.getElementById('nbbu-presence-settings')) { syncPanelToggles(root); return; }
+        const sec = document.createElement('section');
+        sec.id = 'nbbu-presence-settings';
+        sec.style.cssText = 'margin:0 16px 10px;padding:12px 14px;border:1px solid rgba(139,92,246,.35);'
+            + 'border-radius:10px;background:rgba(139,92,246,.06);font:inherit;';
+        sec.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:800;color:#7c3aed;margin-bottom:8px;">'
+            + '<span style="display:inline-flex;width:16px;height:16px;border-radius:50%;background:#8b5cf6;align-items:center;justify-content:center;">'
+            + CHECK_MINI + '</span> חיווי נוכחות "משתמש בסקריפט"</div>'
+            + '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:6px 0;">'
+            + '<input type="checkbox" data-nbbu="enabled"><span>סמן אותי כמשתמש הסקריפט '
+            + '<small style="opacity:.7">(כבוי = מוסתר, וגם לא רואה אף מסומן)</small></span></label>'
+            + '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:6px 0;">'
+            + '<input type="checkbox" data-nbbu="usersFilter"><span>בדף /users: הצג רק משתמשי הסקריפט</span></label>';
+        panel.insertBefore(sec, moduleList);
+        sec.querySelector('[data-nbbu="enabled"]').addEventListener('change', e => {
+            enabled = e.target.checked;
+            GM_setValue(ENABLED_KEY, enabled);
+            location.reload(); // כמו טוגל התפריט - מצב הרשת/סריקה נקבע בטעינה
+        });
+        sec.querySelector('[data-nbbu="usersFilter"]').addEventListener('change', e => {
+            usersFilterOn = e.target.checked;
+            GM_setValue(USERS_FILTER_KEY, usersFilterOn);
+            scheduleScan();
+        });
+        syncPanelToggles(root);
+    }
+
+    /* ---------- observer ---------- */
+    let scanScheduled = false;
+    let lastVerifiedCount = -1;
+    function verifiedCount() {
+        let n = 0;
+        for (const uid in cache) { if (cache[uid] && cache[uid].isUser) n += 1; }
+        return n;
+    }
+    function scheduleScan() {
+        if (scanScheduled) return;
+        scanScheduled = true;
+        requestAnimationFrame(() => {
+            scanScheduled = false;
+            scanContainer(document);
+            badgeAvatars();
+            badgeChatTitles();
+            applyUsersFilter();
+            badgeUsersCards();
+            ensurePanelSettings();
+            const vc = verifiedCount();
+            if (vc !== lastVerifiedCount) {
+                lastVerifiedCount = vc;
+                log('משתמשים מאומתים במטמון: ' + vc, Object.keys(cache).filter(u => cache[u].isUser));
+            }
+        });
+    }
+
+    function start() {
+        log('התחיל. סימן=' + [...MARKER].length + ' תווי-TAG, מאומתים במטמון=' + verifiedCount());
+        addStyles();
+        scheduleScan();
+        const obs = new MutationObserver(() => scheduleScan());
+        obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+        whenAppReady(firstRunEditLastPost);
+    }
+
+    // עוטפים את הרשת מיד (document-start) כדי לא לפספס שליחות מוקדמות
+    wrapNetwork();
+
+    // opt-out דרך תפריט הסקריפט (ברירת מחדל: פעיל). כשמכובה - הפוסטים/הודעות שלי
+    // לא מסומנים ולא נערכת ריצה-ראשונה; עדיין רואים את מי שכן משתמש (סריקה/תגים ממשיכים).
+    try {
+        GM_registerMenuCommand(
+            enabled
+                ? '✓ סימון הנוכחות שלי פעיל (לחץ כדי לא להיות מסומן)'
+                : '✗ הנוכחות שלי מוסתרת (לחץ כדי לסמן אותי שוב)',
+            () => {
+                enabled = !enabled;
+                GM_setValue(ENABLED_KEY, enabled);
+                location.reload();
+            }
+        );
+    } catch { /* אין תמיכה בתפריט - לא קריטי */ }
+
+    if (document.body) {
+        start();
+    } else {
+        document.addEventListener('DOMContentLoaded', start, { once: true });
     }
 })();
