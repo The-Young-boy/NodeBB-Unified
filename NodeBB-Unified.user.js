@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.2.3
+// @version      1.2.4
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -32537,8 +32537,11 @@
 
     const ENABLED_KEY = 'nbbu_presence_enabled_v1';
     const CACHE_KEY = 'nbbu_presence_cache_v2'; // { uid: { isUser, key } }  key=pid/mid אחרון שנראה (v2: איפוס מטמון ישן)
+    const USERS_FILTER_KEY = 'nbbu_presence_users_filter'; // בדף /users: הצג רק משתמשי הסקריפט
+    const PANEL_HOST_ID = 'nodebb-unified-manager-host-v1'; // חייב להתאים ל-host של המנהל המרכזי
 
     let enabled = GM_getValue(ENABLED_KEY, true);
+    let usersFilterOn = GM_getValue(USERS_FILTER_KEY, false);
 
     // לוגים לאבחון (ניתן לכבות: GM_setValue('nbbu_presence_debug', false))
     const DEBUG = GM_getValue('nbbu_presence_debug', true);
@@ -32858,6 +32861,110 @@
         setTimeout(() => whenAppReady(cb, tries - 1), 500);
     }
 
+    /* ---------- דף /users: סינון "רק משתמשי הסקריפט" ---------- */
+    // הזיהוי הרגיל בונה מטמון רק ממי שראינו את הפוסטים שלו בשרשורים. בדף /users רובם לא במטמון,
+    // אז כשהסינון פעיל בודקים אקטיבית כל כרטיס פעם אחת (מושכים פוסטים אחרונים, מחפשים סימן).
+    const checkedSlugs = new Set(); // slug שכבר נבדק (מונע פטיש-API)
+    let checkingCount = 0;
+
+    function onUsersPage() {
+        return /^\/users\b/i.test(location.pathname);
+    }
+    function usersContainer() {
+        return document.querySelector('[component="users/container"]')
+            || document.querySelector('.users-container, #users-container');
+    }
+    function userCards() {
+        const c = usersContainer();
+        if (!c) return [];
+        const seen = new Set();
+        const cards = [];
+        // כל כרטיס = צאצא-ישיר של הקונטיינר; ה-uid על [data-uid] בתוכו (avatar/icon או avatar/picture)
+        [...c.children].forEach(card => {
+            const link = card.querySelector('a[href*="/user/"]');
+            const uidEl = card.querySelector('[data-uid]');
+            const uid = uidEl && uidEl.getAttribute('data-uid');
+            if (!link || !uid || uid === '0' || seen.has(uid)) return;
+            seen.add(uid);
+            const slug = (link.getAttribute('href').match(/\/user\/([^/?#]+)/) || [])[1];
+            cards.push({ card, uid, slug });
+        });
+        return cards;
+    }
+    async function checkHasScript(slug) {
+        try {
+            const r = await W.fetch('/api/user/' + encodeURIComponent(slug) + '/posts',
+                { headers: { Accept: 'application/json' }, credentials: 'same-origin' }).then(r => r.json());
+            const posts = (r && r.posts) || [];
+            return posts.some(p => hasMarker(p && (p.content || ''))); // סימן שורד גם ב-content המרונדר
+        } catch { return null; }
+    }
+    function applyUsersFilter() {
+        if (!onUsersPage() || !usersContainer()) return;
+        const active = usersFilterOn && enabled; // הדדיות: opt-out לא מסנן/רואה
+        const cards = userCards();
+        if (active) {
+            for (const { slug, uid } of cards) {
+                if (!slug || checkedSlugs.has(slug) || (cache[uid] && cache[uid].isUser)) continue;
+                if (checkingCount >= 3) break; // ponytail: תקרת קונקורנטיות פשוטה (3), מספיק לדף
+                checkedSlugs.add(slug);
+                checkingCount += 1;
+                checkHasScript(slug).then(is => {
+                    checkingCount -= 1;
+                    if (is) recordPresence(uid, Date.now(), true); // sticky: ננעל כמשתמש
+                    scheduleScan();
+                });
+            }
+        }
+        cards.forEach(({ card, uid }) => {
+            const isUser = !!(cache[uid] && cache[uid].isUser);
+            card.style.display = (active && !isUser) ? 'none' : '';
+        });
+    }
+
+    /* ---------- טוגלים גרפיים בפאנל ההגדרות המרכזי (Shadow DOM פתוח) ---------- */
+    const CHECK_MINI = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none">'
+        + '<path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    function syncPanelToggles(root) {
+        const sec = root.getElementById('nbbu-presence-settings');
+        if (!sec) return;
+        sec.querySelector('[data-nbbu="enabled"]').checked = enabled;
+        sec.querySelector('[data-nbbu="usersFilter"]').checked = usersFilterOn;
+    }
+    function ensurePanelSettings() {
+        const host = document.getElementById(PANEL_HOST_ID);
+        const root = host && host.shadowRoot;
+        if (!root) return;
+        const panel = root.querySelector('.panel');
+        const moduleList = root.querySelector('[data-role="module-list"]');
+        if (!panel || !moduleList) return;
+        if (root.getElementById('nbbu-presence-settings')) { syncPanelToggles(root); return; }
+        const sec = document.createElement('section');
+        sec.id = 'nbbu-presence-settings';
+        sec.style.cssText = 'margin:0 16px 10px;padding:12px 14px;border:1px solid rgba(139,92,246,.35);'
+            + 'border-radius:10px;background:rgba(139,92,246,.06);font:inherit;';
+        sec.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:800;color:#7c3aed;margin-bottom:8px;">'
+            + '<span style="display:inline-flex;width:16px;height:16px;border-radius:50%;background:#8b5cf6;align-items:center;justify-content:center;">'
+            + CHECK_MINI + '</span> חיווי נוכחות "משתמש בסקריפט"</div>'
+            + '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:6px 0;">'
+            + '<input type="checkbox" data-nbbu="enabled"><span>סמן אותי כמשתמש הסקריפט '
+            + '<small style="opacity:.7">(כבוי = מוסתר, וגם לא רואה אף מסומן)</small></span></label>'
+            + '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:6px 0;">'
+            + '<input type="checkbox" data-nbbu="usersFilter"><span>בדף /users: הצג רק משתמשי הסקריפט</span></label>';
+        panel.insertBefore(sec, moduleList);
+        sec.querySelector('[data-nbbu="enabled"]').addEventListener('change', e => {
+            enabled = e.target.checked;
+            GM_setValue(ENABLED_KEY, enabled);
+            location.reload(); // כמו טוגל התפריט - מצב הרשת/סריקה נקבע בטעינה
+        });
+        sec.querySelector('[data-nbbu="usersFilter"]').addEventListener('change', e => {
+            usersFilterOn = e.target.checked;
+            GM_setValue(USERS_FILTER_KEY, usersFilterOn);
+            scheduleScan();
+        });
+        syncPanelToggles(root);
+    }
+
     /* ---------- observer ---------- */
     let scanScheduled = false;
     let lastVerifiedCount = -1;
@@ -32874,6 +32981,8 @@
             scanContainer(document);
             badgeAvatars();
             badgeChatTitles();
+            applyUsersFilter();
+            ensurePanelSettings();
             const vc = verifiedCount();
             if (vc !== lastVerifiedCount) {
                 lastVerifiedCount = vc;
