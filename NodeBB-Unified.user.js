@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.3.0
+// @version      1.3.1
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -4486,12 +4486,6 @@
                 box-sizing: border-box;
             }
 
-            /* אין badge של מונה על אייקון-הניווט - מבלבל כמו התראה שלא נקראה */
-            #${SIDEBAR_ITEM_ID} .mtpun-sidebar-count,
-            #${SIDEBAR_ITEM_ID} .mtpun-floating-count {
-                display: none !important;
-            }
-
             body > .mtpun-floating-button {
                 visibility: hidden !important;
             }
@@ -4725,15 +4719,15 @@
             'המשתמשים המסומנים שלי'
         );
 
-        // בלי badge של מונה: זה אייקון-ניווט, לא מונה-התראות. עיגול צבעוני עם מספר
-        // נראה כמו הודעה חדשה שלא נקראה ומבלבל. (count עדיין נקרא לצרכים אחרים)
-        void count;
+        // ה-badge של המונה מופיע רק כשיש מסומנים בפועל (count>0).
+        // כשאין - רק האייקון, אחרת "0" נראה כמו התראה שלא נקראה.
         button.innerHTML = `
             <span class="mtpun-sidebar-icon-wrapper">
                 <i
                     class="fa fa-fw fa-note-sticky mtpun-sidebar-icon"
                     aria-hidden="true"
                 ></i>
+                ${count > 0 ? `<span class="mtpun-sidebar-count">${count}</span>` : ''}
             </span>
         `;
     }
@@ -32878,7 +32872,7 @@
     }
 
     /* ---------- ריצה ראשונה: עריכת הפוסט האחרון להוספת הסימן (חיווי מיידי) ---------- */
-    const FIRSTRUN_KEY = 'nbbu_presence_firstrun_v1';
+    const FIRSTRUN_KEY = 'nbbu_presence_firstrun_v2'; // v2: איפוס כדי לנסות שוב את עריכת-הפוסט
 
     async function getCsrf() {
         try {
