@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.2.0
+// @version      1.2.1
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -25875,6 +25875,7 @@
             .${CLASS_NAMES.host} {
                 position: relative !important;
                 overflow: visible !important;
+                isolation: isolate !important;
             }
 
             .${CLASS_NAMES.badge} {
@@ -32698,7 +32699,7 @@
         const style = document.createElement('style');
         style.id = 'nbbu-presence-style';
         style.textContent = `
-            .${BADGE_HOST_CLASS} { position: relative !important; overflow: visible !important; }
+            .${BADGE_HOST_CLASS} { position: relative !important; overflow: visible !important; isolation: isolate !important; }
             .${BADGE_CLASS} {
                 position: absolute !important;
                 right: -2px !important; bottom: -2px !important;  /* פינה ימנית-תחתונה (פיזי, גם ב-RTL) */
