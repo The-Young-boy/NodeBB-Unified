@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      2.0.0
+// @version      2.1.0
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -15877,6 +15877,8 @@
     function injectChatButtons() {
         // בדיקה מקורית תחילה; ב-NodeBB מודרני app אינו תמיד גלובלי.
         const rawWin = pageWindow();
+        // בפורומים שהצ'אט מושבת בהם (config.disableChat) הכפתור מוביל לשום מקום - לא מזריקים.
+        if (rawWin.config && rawWin.config.disableChat) return;
         const originalUid = rawWin.app && rawWin.app.user
             ? rawWin.app.user.uid
             : null;
