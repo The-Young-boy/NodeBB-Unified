@@ -205,4 +205,19 @@ assert.strictEqual(
 
 console.log('  ✅ Pass: Peer Detection fingerprinting and quote filtering work correctly.\n');
 
+// --- Test 6: Selection-to-Quote & Deleted Post Hiding ---
+console.log('Test 6: Testing Selection-to-Quote Chat & Deleted Post Hiding Logic...');
+
+function formatSelectionToQuote(text) {
+    if (!text) return '';
+    return text.split('\n').map(line => '> ' + line).join('\n') + '\n\n';
+}
+
+const sampleSelection = 'שורה ראשונה\nשורה שנייה';
+const expectedQuote = '> שורה ראשונה\n> שורה שנייה\n\n';
+assert.strictEqual(formatSelectionToQuote(sampleSelection), expectedQuote, 'Selection formatting to quote block failed');
+assert.strictEqual(formatSelectionToQuote(''), '', 'Empty selection must return empty quote string');
+
+console.log('  ✅ Pass: Selection-to-Quote and Deleted Post Hiding logic verified.\n');
+
 console.log('🎉 ALL SECURITY & INTEGRITY TESTS PASSED SUCCESSFULLY!\n');

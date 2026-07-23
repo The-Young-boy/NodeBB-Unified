@@ -28452,6 +28452,7 @@
                             }
 
                             /*
+                             * id: "hide-deleted-posts",
                              * אם נוסף פוסט שלם,
                              * מטפלים בו מיד.
                              */
@@ -29219,6 +29220,82 @@
         }
     },
 
+    {
+        id: "hide-deleted-posts",
+        name: "מתמחים טופ - הסתרת פוסטים מחוקים",
+        description: "מסתיר אוטומטית פוסטים ותגובות שנמחקו בפורום מתמחים טופ",
+        category: "תוכן ופוסטים",
+        originalFile: "הסתרת פוסטים מחוקים.txt",
+        version: "1.0.0",
+        author: "Amlaach & Moishy",
+        runAt: "document-idle",
+        matches: ["https://mitmachim.top/*","https://www.mitmachim.top/*"],
+        noframes: false,
+        enabledByDefault: true,
+        requiresReload: true,
+        storageKeys: ["mitmachim_hide_deleted_posts_enabled_v1"],
+        sourceSha256: "",
+        originalBodySha256: "",
+        embeddedBodySha256: "",
+        mergeChanges: [],
+        factory: function (
+            GM_getValue,
+            GM_setValue,
+            GM_deleteValue,
+            GM_listValues,
+            GM_addStyle,
+            GM_registerMenuCommand,
+            GM_notification,
+            GM_xmlhttpRequest,
+            GM_setClipboard,
+            unsafeWindow,
+            window,
+            $,
+            jQuery
+        ) {
+/* SOURCE_START: הסתרת פוסטים מחוקים.txt */
+(function () {
+    'use strict';
+
+    const enabledKey = 'mitmachim_hide_deleted_posts_enabled_v1';
+    let enabled = GM_getValue(enabledKey, true);
+    if (!enabled) return;
+
+    GM_addStyle(`
+        [component="post"].deleted,
+        li.deleted,
+        .post-row.deleted {
+            display: none !important;
+        }
+    `);
+
+    function hideDeletedPosts() {
+        if (typeof $ !== 'undefined') {
+            try {
+                $('li.deleted .content:contains("פוסט זה נמחק"), [component="post"].deleted').closest('li.deleted, [component="post"]').hide();
+            } catch (_) {}
+        }
+
+        document.querySelectorAll('[component="post"].deleted, li.deleted, .post-row.deleted').forEach(el => {
+            el.style.setProperty('display', 'none', 'important');
+        });
+    }
+
+    hideDeletedPosts();
+
+    if (typeof $ !== 'undefined') {
+        $(window).on('action:posts.loaded action:topic.loaded action:ajaxify.end', hideDeletedPosts);
+    }
+
+    const observer = new MutationObserver(hideDeletedPosts);
+    observer.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true
+    });
+})();
+/* SOURCE_END: הסתרת פוסטים מחוקים.txt */
+        }
+    },
     {
         id: "peer-detection",
         name: "מתמחים טופ - זיהוי הדדי בין משתמשי הסקריפט",
