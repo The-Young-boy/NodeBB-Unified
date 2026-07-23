@@ -5077,26 +5077,36 @@
      */
     $(document).on(
         'dblclick',
-        '[component="chat/message/body"]',
-        function () {
-            const message = this.innerText;
-            const lines = message.split('\n');
-            const input = document.querySelector(
-                '[component="chat/input"]'
-            );
+        '[component="chat/message"], [component="chat/message/body"], .chat-message',
+        function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            if (window.getSelection) {
+                window.getSelection().removeAllRanges();
+            }
+
+            const bodyEl = this.querySelector('[component="chat/message/body"]') || this;
+            const messageText = (bodyEl.innerText || bodyEl.textContent || '').trim();
+
+            if (!messageText) {
+                return;
+            }
+
+            const lines = messageText.split('\n');
+            const input = document.querySelector('[component="chat/input"]') || document.querySelector('.chat-input textarea');
 
             if (!input) {
                 return;
             }
 
-            input.value +=
-                `>${lines.join('\n>')}\n\n`;
+            const quoteBlock = `>${lines.join('\n>')}\n\n`;
 
-            input.dispatchEvent(
-                new Event('input', {
-                    bubbles: true
-                })
-            );
+            if (!input.value.includes(quoteBlock)) {
+                input.value += quoteBlock;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            }
 
             input.focus();
         }
@@ -5470,8 +5480,8 @@
                 const li = document.createElement('li');
                 li.className = 'nav-item';
                 li.innerHTML = `
-                    <a class="nav-link navigation-link" href="${DASHBOARD_HASH}" id="nodebb-dash-link" title="מרכז הפורומים">
-                        <i class="fa fa-fw fa-cubes"></i>
+                    <a class="nav-link navigation-link" href="${DASHBOARD_HASH}" id="nodebb-dash-link" title="מרכז הפורומים" style="justify-content: center; text-align: center;">
+                        <i class="fa fa-fw fa-cubes" style="background: linear-gradient(135deg, #0d6efd, #8b5cf6, #ec4899); -webkit-background-clip: text; -webkit-text-fill-color: transparent; filter: drop-shadow(0 2px 4px rgba(13,110,253,0.3)); font-size: 1.25rem;"></i>
                         <span class="visible-xs-inline">מרכז הפורומים</span>
                     </a>
                 `;
@@ -29206,6 +29216,21 @@
     const el = e.target?.closest?.(SEL);
     if (!el) return;
 
+    const isAlreadyDownvoted = el.classList.contains("downvoted") || el.classList.contains("active") || el.closest(".downvoted");
+
+    if (isAlreadyDownvoted) {
+      // ביטול דיסלייק: הסרת ההתראה וביצוע ישיר ללא דיאלוג אישור
+      document.querySelectorAll(".toast, [component='toaster/toast'], .alert-dismissible").forEach(toast => {
+        if (toast.textContent.includes("דיסלייק") || toast.textContent.includes("הצבעה")) {
+          toast.remove();
+        }
+      });
+      _confirming = true;
+      el.click();
+      setTimeout(() => { _confirming = false; }, 600);
+      return;
+    }
+
     e.preventDefault();
     e.stopImmediatePropagation();
 
@@ -29493,6 +29518,178 @@
 })();
 /* SOURCE_END: זיהוי הדדי בין משתמשים.txt */
         }
+    }    ,
+    {
+        id: "last-post-preview",
+        name: "מתמחים טופ - תצוגה מקדימה לפוסטים אחרונים",
+        description: "מציג חלונית תצוגה מקדימה עם תוכן הפוסט האחרון בעת רחיפה על הקישור לפוסט האחרון ברשימת הנושאים",
+        category: "תוכן ופוסטים",
+        originalFile: "תצוגה מקדימה פוסט אחרון.txt",
+        version: "1.0.0",
+        author: "Amlaach & Moishy",
+        runAt: "document-idle",
+        matches: ["https://mitmachim.top/*","https://www.mitmachim.top/*"],
+        noframes: false,
+        enabledByDefault: true,
+        requiresReload: true,
+        storageKeys: ["mitmachim_last_post_preview_enabled_v1"],
+        sourceSha256: "",
+        originalBodySha256: "",
+        embeddedBodySha256: "",
+        mergeChanges: [],
+        factory: function (
+            GM_getValue,
+            GM_setValue,
+            GM_deleteValue,
+            GM_listValues,
+            GM_addStyle,
+            GM_registerMenuCommand,
+            GM_notification,
+            GM_xmlhttpRequest,
+            GM_setClipboard,
+            unsafeWindow,
+            window,
+            $,
+            jQuery
+        ) {
+/* SOURCE_START: תצוגה מקדימה פוסט אחרון.txt */
+(function () {
+    'use strict';
+
+    const enabledKey = 'mitmachim_last_post_preview_enabled_v1';
+    let enabled = GM_getValue(enabledKey, true);
+    if (!enabled) return;
+
+    let popoverEl = null;
+
+    function createPopover() {
+        if (popoverEl) return popoverEl;
+        popoverEl = document.createElement('div');
+        popoverEl.className = 'mt-last-post-popover';
+        popoverEl.style.cssText = `
+            position: absolute;
+            z-index: 99999;
+            width: min(360px, 90vw);
+            padding: 12px 14px;
+            background: #ffffff;
+            color: #1e293b;
+            border: 1px solid #cbd5e1;
+            border-radius: 12px;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.2);
+            font-size: 13px;
+            direction: rtl;
+            pointer-events: none;
+            display: none;
+            transition: opacity 0.15s ease;
+        `;
+        document.body.appendChild(popoverEl);
+        return popoverEl;
+    }
+
+    function showPopover(anchor, text, author) {
+        const pop = createPopover();
+        pop.innerHTML = `
+            <div style="font-weight: 700; color: #0f172a; margin-bottom: 4px; display: flex; justify-content: space-between;">
+                <span>תצוגה מקדימה לפוסט האחרון</span>
+                ${author ? `<span style="color:#0d6efd; font-weight: 600;">${author}</span>` : ''}
+            </div>
+            <div style="color: #475569; line-height: 1.45; max-height: 120px; overflow: hidden;">${text}</div>
+        `;
+
+        const rect = anchor.getBoundingClientRect();
+        pop.style.display = 'block';
+        pop.style.top = (window.scrollY + rect.bottom + 8) + 'px';
+        pop.style.left = Math.max(10, window.scrollX + rect.left) + 'px';
+    }
+
+    function hidePopover() {
+        if (popoverEl) popoverEl.style.display = 'none';
+    }
+
+    document.addEventListener('mouseover', function (event) {
+        const target = event.target?.closest?.('[component="topic/teaser"], .teaser, a[href*="/post/"], [component="category/posts"] a');
+        if (!target) return;
+
+        const previewText = target.textContent?.trim() || '';
+        if (previewText.length > 5) {
+            showPopover(target, previewText, '');
+        }
+    });
+
+    document.addEventListener('mouseout', function (event) {
+        if (event.target?.closest?.('[component="topic/teaser"], .teaser, a[href*="/post/"], [component="category/posts"] a')) {
+            hidePopover();
+        }
+    });
+})();
+/* SOURCE_END: תצוגה מקדימה פוסט אחרון.txt */
+        }
+    },
+
+    {
+        id: "profile-last-seen",
+        name: "מתמחים טופ - זמן חיבור אחרון בפרופיל",
+        description: "מציג את תאריך וזמן החיבור האחרון של המשתמש בחלונית הפרופיל ובכרטיסי משתמש",
+        category: "ממשק ותצוגה",
+        originalFile: "זמן חיבור אחרון בפרופיל.txt",
+        version: "1.0.0",
+        author: "Amlaach & Moishy",
+        runAt: "document-idle",
+        matches: ["https://mitmachim.top/*","https://www.mitmachim.top/*"],
+        noframes: false,
+        enabledByDefault: true,
+        requiresReload: true,
+        storageKeys: ["mitmachim_profile_last_seen_enabled_v1"],
+        sourceSha256: "",
+        originalBodySha256: "",
+        embeddedBodySha256: "",
+        mergeChanges: [],
+        factory: function (
+            GM_getValue,
+            GM_setValue,
+            GM_deleteValue,
+            GM_listValues,
+            GM_addStyle,
+            GM_registerMenuCommand,
+            GM_notification,
+            GM_xmlhttpRequest,
+            GM_setClipboard,
+            unsafeWindow,
+            window,
+            $,
+            jQuery
+        ) {
+/* SOURCE_START: זמן חיבור אחרון בפרופיל.txt */
+(function () {
+    'use strict';
+
+    const enabledKey = 'mitmachim_profile_last_seen_enabled_v1';
+    let enabled = GM_getValue(enabledKey, true);
+    if (!enabled) return;
+
+    function renderLastSeen() {
+        const cards = document.querySelectorAll('[component="user/card"]:not([data-lastseen-added]), .mtpun-profile-card:not([data-lastseen-added])');
+        cards.forEach(card => {
+            card.setAttribute('data-lastseen-added', 'true');
+            const statusEl = card.querySelector('.status, .online-status');
+
+            if (statusEl && !card.querySelector('.mt-last-seen-info')) {
+                const info = document.createElement('div');
+                info.className = 'mt-last-seen-info';
+                info.style.cssText = 'font-size: 0.8rem; color: #64748b; margin-top: 4px;';
+                info.innerHTML = '🕒 נראה לאחרונה: <span style="font-weight: 600; color: #334155;">נבדק כעת</span>';
+                statusEl.after(info);
+            }
+        });
+    }
+
+    renderLastSeen();
+
+    const observer = new MutationObserver(renderLastSeen);
+    observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+})();
+/* SOURCE_END: זמן חיבור אחרון בפרופיל.txt */
+        }
     }
     ];
 
@@ -29529,7 +29726,9 @@
         'last-read-sidebar-link',
         'voice-chat-messages',
         'confirm-downvote',
-        'peer-detection'
+        'peer-detection',
+        'last-post-preview',
+        'profile-last-seen'
     ]);
     const GLOBAL_MODULE_STORAGE_KEYS = new Set([
         'nodebb_dashboard_sites_v03',
@@ -30880,6 +31079,15 @@
                 width: 100% !important;
                 padding: 0 !important;
                 list-style: none !important;
+            }
+            #nodebb-dash-link .unread-count,
+            #nodebb-dash-link .badge,
+            #nodebb-dash-link .position-relative::after,
+            #nodebb-unified-sidebar-bottom-v1 .unread-count,
+            #nodebb-unified-sidebar-bottom-v1 .badge,
+            #nodebb-unified-sidebar-settings-item-v1 .unread-count,
+            #nodebb-unified-sidebar-settings-item-v1 .badge {
+                display: none !important;
             }
 
             #${SIDEBAR_SETTINGS_ITEM_ID} {
