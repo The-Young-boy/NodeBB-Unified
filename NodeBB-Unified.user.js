@@ -33481,6 +33481,195 @@
         });
     }
 
+    /* ---------- עמוד מרוכז: כל משתמשי הסקריפט במקום אחד ----------
+       הפילטר ב-/users רק מסתיר לא-משתמשים בתוך העמוד המעומד של NodeBB, אז אי אפשר
+       לספור/לראות את כולם בלי לדפדף את כל הפורום. כאן אוספים לרשימה אחת: seed מהמטמון
+       (מי שנראה בגלישה) + קציר פעילים (מקוונים + נושאים אחרונים) + סריקה-עמוקה אופציונלית. */
+    const META_KEY = 'nbbu_presence_meta_v1'; // uid -> {name, slug, pic, it, ib}
+    let meta = {};
+    try { meta = GM_getValue(META_KEY, {}) || {}; } catch { meta = {}; }
+    let metaFlush = null;
+    function scheduleMetaFlush() {
+        if (metaFlush) return;
+        metaFlush = setTimeout(() => {
+            metaFlush = null;
+            try { GM_setValue(META_KEY, meta); } catch { /* מלא? מתעלמים */ }
+        }, 3000);
+    }
+    function escHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function rememberUser(u) {
+        if (!u || !u.uid) return;
+        const uid = String(u.uid);
+        const slug = u.userslug || u.slug || '';
+        const prev = meta[uid] || {};
+        meta[uid] = {
+            name: u.username || prev.name || slug || ('uid ' + uid),
+            slug: slug || prev.slug || '',
+            pic: (u.picture != null ? u.picture : prev.pic) || '',
+            it: (u['icon:text'] != null ? u['icon:text'] : prev.it) || '',
+            ib: (u['icon:bgColor'] != null ? u['icon:bgColor'] : prev.ib) || '#888'
+        };
+        scheduleMetaFlush();
+    }
+    async function apiGet(path) {
+        try {
+            const r = await W.fetch(path, { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+            return JSON.parse(await r.text());
+        } catch { return null; }
+    }
+    // בודק משתמש בודד: מושך פוסטים, מחפש סימן, ותופס מטא אגב-אורחא
+    async function probeUser(uid, slug) {
+        if (!slug) return false;
+        if (cache[uid] && cache[uid].isUser) return true;
+        const r = await apiGet('/api/user/' + encodeURIComponent(slug) + '/posts');
+        const posts = (r && r.posts) || [];
+        if (posts[0] && posts[0].user) rememberUser(posts[0].user);
+        const is = posts.some(p => hasMarker(p && (p.content || '')));
+        if (is) { rememberUser({ uid, userslug: slug, username: posts[0] && posts[0].user && posts[0].user.username }); recordPresence(uid, Date.now(), true); }
+        return is;
+    }
+    let scanBusy = false, scanStop = false, scanProgress = '';
+    // ריצה חסומת-קונקורנטיות (3) עם אפשרות-עצירה
+    async function runPool(items, worker, onTick) {
+        let i = 0, active = 0, done = 0;
+        return new Promise(resolve => {
+            const pump = () => {
+                if (scanStop) { if (active === 0) resolve(); return; }
+                while (active < 3 && i < items.length) {
+                    const it = items[i++]; active += 1;
+                    Promise.resolve(worker(it)).catch(() => {}).then(() => {
+                        active -= 1; done += 1;
+                        if (onTick) onTick(done, items.length);
+                        pump();
+                    });
+                }
+                if (active === 0 && i >= items.length) resolve();
+            };
+            pump();
+        });
+    }
+    function setProgress(t) { scanProgress = t; const el = document.getElementById('nbbu-up-progress'); if (el) el.textContent = t; }
+    // קציר פעילים: מקוונים + N עמודי נושאים-אחרונים -> בדיקת סימן למי שעוד לא ידוע
+    async function harvestActive(pages = 5) {
+        const cands = new Map(); // slug -> uid
+        const online = await apiGet('/api/users?section=online');
+        ((online && online.users) || []).forEach(u => { if (u.userslug) { cands.set(u.userslug, u.uid); rememberUser(u); } });
+        for (let p = 1; p <= pages && !scanStop; p += 1) {
+            const rec = await apiGet('/api/recent?page=' + p);
+            ((rec && rec.topics) || []).forEach(t => {
+                [t.user, t.teaser && t.teaser.user].forEach(u => { if (u && u.userslug) { cands.set(u.userslug, u.uid); rememberUser(u); } });
+            });
+        }
+        const list = [...cands].map(([slug, uid]) => ({ slug, uid })).filter(x => !(cache[x.uid] && cache[x.uid].isUser));
+        let n = 0;
+        await runPool(list, x => probeUser(x.uid, x.slug), (d, tot) => { n = d; setProgress('קציר פעילים: ' + d + '/' + tot + ' נבדקו, ' + scriptUsers().length + ' נמצאו'); refreshUI(); });
+        setProgress('קציר הסתיים: ' + scriptUsers().length + ' משתמשים');
+    }
+    // ponytail: סריקה מלאה = בקשה לכל משתמש בפורום (מתמחים ~30k => ~612 עמודים). אופציונלי, ניתן-לעצירה,
+    // ומצטבר (מי שכבר נעול במטמון מדולג), אז ריצה חוזרת מתקדמת. לא רץ אוטומטית - רק בלחיצה.
+    async function deepScan() {
+        const first = await apiGet('/api/users?section=joindate&page=1');
+        const pageCount = (first && first.pagination && first.pagination.pageCount) || 1;
+        const total = (first && first.userCount) || pageCount * 50;
+        let checked = 0;
+        for (let p = 1; p <= pageCount && !scanStop; p += 1) {
+            const data = p === 1 ? first : await apiGet('/api/users?section=joindate&page=' + p);
+            const users = (data && data.users) || [];
+            users.forEach(rememberUser);
+            const list = users.filter(u => u.userslug && !(cache[u.uid] && cache[u.uid].isUser));
+            await runPool(list, u => probeUser(u.uid, u.userslug), () => { checked += 1; setProgress('סריקה עמוקה: ' + checked + '/' + total + ' נבדקו, ' + scriptUsers().length + ' נמצאו'); refreshUI(); });
+        }
+        setProgress((scanStop ? 'נעצר: ' : 'הסתיים: ') + scriptUsers().length + ' משתמשים');
+    }
+    async function runScan(fn) {
+        if (scanBusy) { scanStop = true; return; } // לחיצה שנייה = עצור
+        scanBusy = true; scanStop = false; refreshUI();
+        try { await fn(); } finally { scanBusy = false; scanStop = false; refreshUI(); }
+    }
+    function scriptUsers() {
+        return Object.keys(cache)
+            .filter(uid => cache[uid] && cache[uid].isUser)
+            .map(uid => ({ uid, name: (meta[uid] && meta[uid].name) || ('uid ' + uid), slug: (meta[uid] && meta[uid].slug) || '', pic: meta[uid] && meta[uid].pic, it: meta[uid] && meta[uid].it, ib: (meta[uid] && meta[uid].ib) || '#888' }));
+    }
+    function avatarHtml(u) {
+        if (u.pic) return '<img src="' + escHtml(u.pic) + '" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex:0 0 auto;">';
+        return '<span style="width:34px;height:34px;border-radius:50%;background:' + escHtml(u.ib) + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;flex:0 0 auto;">' + escHtml(u.it || (u.name || '?').slice(0, 1)) + '</span>';
+    }
+    const UP_ID = 'nbbu-users-panel';
+    let modalOpen = false;
+    function ensureButton() {
+        if (!onUsersPage()) { const b = document.getElementById(UP_ID + '-btn'); if (b) b.remove(); return; }
+        let b = document.getElementById(UP_ID + '-btn');
+        if (!b) {
+            b = document.createElement('button');
+            b.id = UP_ID + '-btn'; b.type = 'button';
+            b.style.cssText = 'position:fixed;inset-inline-start:16px;bottom:16px;z-index:99990;display:flex;align-items:center;gap:8px;'
+                + 'padding:10px 15px;border:none;border-radius:999px;background:#8b5cf6;color:#fff;font:700 14px/1 inherit;cursor:pointer;'
+                + 'box-shadow:0 3px 12px rgba(0,0,0,.3);';
+            b.addEventListener('click', openModal);
+            document.body.appendChild(b);
+        }
+        b.innerHTML = '<span style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:#fff;color:#8b5cf6;'
+            + 'align-items:center;justify-content:center;font-weight:900;font-size:12px;">✓</span> משתמשי הסקריפט (' + scriptUsers().length + ')';
+    }
+    function openModal() {
+        if (document.getElementById(UP_ID)) return;
+        modalOpen = true;
+        const host = document.createElement('div');
+        host.id = UP_ID;
+        host.style.cssText = 'position:fixed;inset:0;z-index:99991;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;direction:rtl;';
+        host.innerHTML =
+            '<div style="background:var(--bs-body-bg,#fff);color:var(--bs-body-color,#212529);width:min(560px,94vw);max-height:88vh;display:flex;flex-direction:column;border-radius:14px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.4);font:14px/1.4 inherit;">'
+            + '<div style="display:flex;align-items:center;gap:8px;padding:14px 16px;background:#8b5cf6;color:#fff;font-weight:800;">'
+            + '<span style="flex:1;">משתמשי הסקריפט (<span id="nbbu-up-count">0</span>)</span>'
+            + '<button id="nbbu-up-close" type="button" style="border:none;background:transparent;color:#fff;font-size:22px;line-height:1;cursor:pointer;">×</button></div>'
+            + '<div style="padding:10px 16px;"><input id="nbbu-up-search" type="search" placeholder="חיפוש לפי שם..." style="width:100%;padding:8px 12px;border:1px solid #ccc;border-radius:8px;font:inherit;box-sizing:border-box;"></div>'
+            + '<div id="nbbu-up-list" style="flex:1;overflow:auto;padding:0 10px 6px;"></div>'
+            + '<div style="padding:10px 16px;border-top:1px solid rgba(0,0,0,.1);">'
+            + '<div id="nbbu-up-progress" style="font-size:12px;opacity:.75;min-height:16px;margin-bottom:8px;"></div>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+            + '<button id="nbbu-up-harvest" type="button" style="flex:1;padding:9px;border:none;border-radius:8px;background:#8b5cf6;color:#fff;font-weight:700;cursor:pointer;">רענון פעילים</button>'
+            + '<button id="nbbu-up-deep" type="button" style="flex:1;padding:9px;border:1px solid #8b5cf6;border-radius:8px;background:transparent;color:#8b5cf6;font-weight:700;cursor:pointer;">סריקה עמוקה</button>'
+            + '</div></div></div>';
+        document.body.appendChild(host);
+        host.addEventListener('click', e => { if (e.target === host) closeModal(); });
+        host.querySelector('#nbbu-up-close').addEventListener('click', closeModal);
+        host.querySelector('#nbbu-up-search').addEventListener('input', updateList);
+        host.querySelector('#nbbu-up-harvest').addEventListener('click', () => runScan(() => harvestActive(5)));
+        host.querySelector('#nbbu-up-deep').addEventListener('click', () => runScan(deepScan));
+        setProgress(scanProgress);
+        refreshUI();
+    }
+    function closeModal() { modalOpen = false; const h = document.getElementById(UP_ID); if (h) h.remove(); }
+    function updateList() {
+        const host = document.getElementById(UP_ID);
+        if (!host) return;
+        const q = (host.querySelector('#nbbu-up-search').value || '').trim();
+        let users = scriptUsers();
+        if (q) users = users.filter(u => (u.name || '').includes(q) || (u.slug || '').includes(q));
+        users.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he'));
+        host.querySelector('#nbbu-up-count').textContent = scriptUsers().length;
+        host.querySelector('#nbbu-up-list').innerHTML = users.length
+            ? users.map(u => '<a href="/user/' + encodeURIComponent(u.slug || '') + '" target="_blank" '
+                + 'style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;color:inherit;text-decoration:none;">'
+                + avatarHtml(u) + '<span style="font-weight:600;">' + escHtml(u.name) + '</span></a>').join('')
+            : '<div style="padding:20px;text-align:center;opacity:.6;">אין עדיין. הרץ "רענון פעילים" או "סריקה עמוקה".</div>';
+    }
+    function refreshUI() {
+        ensureButton();
+        const host = document.getElementById(UP_ID);
+        if (!host) return;
+        updateList();
+        const h = host.querySelector('#nbbu-up-harvest'), d = host.querySelector('#nbbu-up-deep');
+        if (h && d) {
+            h.textContent = scanBusy ? 'עצור' : 'רענון פעילים';
+            d.textContent = scanBusy ? 'עצור' : 'סריקה עמוקה';
+        }
+    }
+
     /* ---------- טוגלים גרפיים בפאנל ההגדרות המרכזי (Shadow DOM פתוח) ---------- */
     const CHECK_MINI = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none">'
         + '<path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -33542,6 +33731,7 @@
             badgeChatTitles();
             applyUsersFilter();
             badgeUsersCards();
+            ensureButton();
             ensurePanelSettings();
             const vc = verifiedCount();
             if (vc !== lastVerifiedCount) {
