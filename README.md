@@ -3,7 +3,7 @@
 # NodeBB Unified – אוסף הכלים המאוחד לפורומי NodeBB
 
 [![Security & Integrity Tests](https://github.com/moishyf/NodeBB-Unified/actions/workflows/test.yml/badge.svg)](https://github.com/moishyf/NodeBB-Unified/actions/workflows/test.yml)
-![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Tampermonkey%20%7C%20Violentmonkey-green.svg)
 ![Target](https://img.shields.io/badge/target-NodeBB%20Forums-orange.svg)
 

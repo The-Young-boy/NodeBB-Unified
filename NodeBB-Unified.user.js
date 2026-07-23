@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeBB Unified – אוסף הכלים המאוחד
 // @namespace    https://mitmachim.top/nodebb-unified/
-// @version      1.2.2
+// @version      2.0.0
 // @description  מאחד את סקריפטי NodeBB המקוריים במודולים מבודדים עם פאנל ניהול מרכזי, גיבוי ואבחון
 // @author       מחברי הסקריפטים המקוריים
 // @updateURL    https://raw.githubusercontent.com/moishyf/NodeBB-Unified/main/NodeBB-Unified.user.js
@@ -29750,7 +29750,7 @@
     }
     ];
 
-    const UNIFIED_VERSION = '1.1.0';
+    const UNIFIED_VERSION = '2.0.0';
     const MANAGER_STATE_KEY = 'nodebb-unified:manager-state:v1';
     const AUTOMATIC_BACKUP_KEY = 'nodebb-unified:automatic-backup:v1';
     const PANEL_HOST_ID = 'nodebb-unified-manager-host-v1';
