@@ -33531,6 +33531,32 @@
         if (is) { rememberUser({ uid, userslug: slug, username: posts[0] && posts[0].user && posts[0].user.username }); recordPresence(uid, Date.now(), true); }
         return is;
     }
+    // השלמת מטא לפי uid: מי שזוהה תוך גלישה נכנס למטמון בלי שם (הסריקה קוראת רק uid+סימן).
+    // /api/user/uid/<uid> מחזיר שם/סלאג/אווטאר. רץ עצמאית (לא מושפע מעצירת הסריקה), עם דה-דופ.
+    const metaFetching = new Set();
+    function needsMeta(uid) {
+        const m = meta[uid];
+        return !m || !m.name || /^uid /.test(m.name) || !m.slug;
+    }
+    async function backfillMeta(uids) {
+        const need = [...new Set(uids)].filter(uid => !metaFetching.has(uid) && needsMeta(uid));
+        if (!need.length) return;
+        need.forEach(uid => metaFetching.add(uid));
+        let i = 0;
+        const worker = async () => {
+            while (i < need.length) {
+                const uid = need[i++];
+                const d = await apiGet('/api/user/uid/' + encodeURIComponent(uid));
+                if (d && (d.username || d.userslug)) {
+                    rememberUser({ uid, username: d.username, userslug: d.userslug, picture: d.picture, 'icon:text': d['icon:text'], 'icon:bgColor': d['icon:bgColor'] });
+                }
+                metaFetching.delete(uid);
+                refreshUI();
+            }
+        };
+        await Promise.all([worker(), worker(), worker()]);
+    }
+
     let scanBusy = false, scanStop = false, scanProgress = '';
     // ריצה חסומת-קונקורנטיות (3) עם אפשרות-עצירה
     async function runPool(items, worker, onTick) {
@@ -33652,11 +33678,14 @@
         if (q) users = users.filter(u => (u.name || '').includes(q) || (u.slug || '').includes(q));
         users.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he'));
         host.querySelector('#nbbu-up-count').textContent = scriptUsers().length;
+        const label = u => /^uid /.test(u.name || '') ? 'טוען שם…' : u.name;
         host.querySelector('#nbbu-up-list').innerHTML = users.length
             ? users.map(u => '<a href="/user/' + encodeURIComponent(u.slug || '') + '" target="_blank" '
                 + 'style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;color:inherit;text-decoration:none;">'
-                + avatarHtml(u) + '<span style="font-weight:600;">' + escHtml(u.name) + '</span></a>').join('')
+                + avatarHtml(u) + '<span style="font-weight:600;">' + escHtml(label(u)) + '</span></a>').join('')
             : '<div style="padding:20px;text-align:center;opacity:.6;">אין עדיין. הרץ "רענון פעילים" או "סריקה עמוקה".</div>';
+        // מי שאין לו שם - נמשך אוטומטית ומתעדכן חי (בלי חסימה)
+        backfillMeta(scriptUsers().filter(u => needsMeta(u.uid)).map(u => u.uid));
     }
     function refreshUI() {
         ensureButton();
