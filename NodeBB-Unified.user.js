@@ -29667,25 +29667,82 @@
     let enabled = GM_getValue(enabledKey, true);
     if (!enabled) return;
 
-    function renderLastSeen() {
-        const cards = document.querySelectorAll('[component="user/card"]:not([data-lastseen-added]), .mtpun-profile-card:not([data-lastseen-added])');
-        cards.forEach(card => {
-            card.setAttribute('data-lastseen-added', 'true');
-            const statusEl = card.querySelector('.status, .online-status');
+    const cache = new Map();
 
-            if (statusEl && !card.querySelector('.mt-last-seen-info')) {
-                const info = document.createElement('div');
-                info.className = 'mt-last-seen-info';
-                info.style.cssText = 'font-size: 0.8rem; color: #64748b; margin-top: 4px;';
-                info.innerHTML = '🕒 נראה לאחרונה: <span style="font-weight: 600; color: #334155;">נבדק כעת</span>';
-                statusEl.after(info);
-            }
-        });
+    function formatTimeAgo(timestamp) {
+        if (!timestamp) return 'לא ידוע';
+        const date = new Date(timestamp);
+        if (isNaN(date.getTime())) return 'לא ידוע';
+
+        const diffSeconds = Math.floor((Date.now() - date.getTime()) / 1000);
+        if (diffSeconds < 60) return 'מחובר כעת';
+        const diffMinutes = Math.floor(diffSeconds / 60);
+        if (diffMinutes < 60) return `לפני ${diffMinutes} דקות`;
+        const diffHours = Math.floor(diffMinutes / 60);
+        if (diffHours < 24) return `לפני ${diffHours} שעות`;
+        const diffDays = Math.floor(diffHours / 24);
+        if (diffDays < 30) return `לפני ${diffDays} ימים`;
+
+        return date.toLocaleDateString('he-IL');
     }
 
-    renderLastSeen();
+    async function fetchLastSeen(uid, userslug) {
+        const cacheKey = uid || userslug;
+        if (cache.has(cacheKey)) return cache.get(cacheKey);
 
-    const observer = new MutationObserver(renderLastSeen);
+        try {
+            const url = uid ? `${location.origin}/api/user/uid/${uid}` : `${location.origin}/api/user/${userslug}`;
+            const res = await fetch(url);
+            if (!res.ok) return null;
+            const data = await res.json();
+            const timeStr = formatTimeAgo(data.lastonlineISO || data.lastonline);
+            cache.set(cacheKey, timeStr);
+            return timeStr;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    async function enhanceUserPopover(popover) {
+        if (popover.hasAttribute('data-mt-lastseen-processed')) return;
+        popover.setAttribute('data-mt-lastseen-processed', 'true');
+
+        let uid = popover.getAttribute('data-uid');
+        let userslug = '';
+
+        if (!uid) {
+            const userLink = popover.querySelector('a[href*="/user/"]');
+            if (userLink) {
+                const href = userLink.getAttribute('href') || '';
+                const match = href.match(/\/user\/([^/?#]+)/);
+                if (match) userslug = match[1];
+            }
+        }
+
+        if (!uid && !userslug) return;
+
+        const targetContainer = popover.querySelector('.user-card-body, .popover-body, .profile-card, .status, [component="user/card"]') || popover;
+        if (targetContainer.querySelector('.mt-popover-lastseen')) return;
+
+        const lastSeenText = await fetchLastSeen(uid, userslug);
+        if (!lastSeenText) return;
+
+        const el = document.createElement('div');
+        el.className = 'mt-popover-lastseen';
+        el.style.cssText = 'font-size:0.8rem; color:#64748b; margin-top:6px; padding-top:6px; border-top:1px dashed #e2e8f0; direction:rtl; text-align:start;';
+        el.innerHTML = `🕒 נראה לאחרונה: <span style="font-weight:600; color:#0f172a;">${lastSeenText}</span>`;
+
+        targetContainer.appendChild(el);
+    }
+
+    function scanPopovers() {
+        const popovers = document.querySelectorAll('[component="user/card"], .user-card, .popover');
+        popovers.forEach(enhanceUserPopover);
+    }
+
+    scanPopovers();
+
+    const observer = new MutationObserver(scanPopovers);
     observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
 })();
 /* SOURCE_END: זמן חיבור אחרון בפרופיל.txt */
